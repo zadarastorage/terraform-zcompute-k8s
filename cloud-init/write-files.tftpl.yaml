@@ -1,0 +1,2 @@
+#cloud-config
+${yamlencode({"write_files": [ for obj in write_files : obj if try(obj.enabled, true) ]})}
