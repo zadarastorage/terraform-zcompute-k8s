@@ -53,6 +53,11 @@ locals {
         lookup(var.node_group_defaults, "tags", {}),
         lookup(v, "tags", {}),
       ) },
+      { cloudinit_config = concat(
+        lookup(local.node_group_defaults, "cloudinit_config", []),
+        lookup(var.node_group_defaults, "cloudinit_config", []),
+        lookup(v, "cloudinit_config", []),
+      ) },
     )
   }
 
