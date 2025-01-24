@@ -123,10 +123,10 @@ case "${SETUP_STATE}" in
 		cfg-set "cluster-init" "true"
 		# Recovery phase
 		if [[ ( ${#ETCD_JSON[@]} -gt 0 ) && ( -z "${ETCD_RESTORE_PATH}" || "${ETCD_RESTORE_PATH}" == "null" ) && ("${ETCD_AUTORESTORE}" == "true") ]]; then
-			_log "Looking for newest etcd snapshot from remote object storage to restore from"
-			ETCD_BACKUPS=$(k3s etcd-snapshot ls -o json 2>/dev/null | jq -c -r '.')
-			LAST_BACKUP=$(echo "${ETCD_BACKUPS}" | jq -c -r '[.items[]|select(.spec.nodeName=="s3")]|sort_by(.status.creationTime)|last')
-			[ -n "${LAST_BACKUP}" ] && [ "${LAST_BACKUP}" != "null" ] && ETCD_RESTORE_PATH=$(echo "${LAST_BACKUP}" | jq -c -r '.spec.snapshotName') && _log "Latest snapshot identified as ${ETCD_RESTORE_PATH}"
+			_log "TODO - Looking for newest etcd snapshot from remote object storage to restore from"
+			#ETCD_BACKUPS=$(k3s etcd-snapshot ls -o json 2>/dev/null | jq -c -r '.')
+			#LAST_BACKUP=$(echo "${ETCD_BACKUPS}" | jq -c -r '[.items[]|select(.spec.nodeName=="s3")]|sort_by(.status.creationTime)|last')
+			#[ -n "${LAST_BACKUP}" ] && [ "${LAST_BACKUP}" != "null" ] && ETCD_RESTORE_PATH=$(echo "${LAST_BACKUP}" | jq -c -r '.spec.snapshotName') && _log "Latest snapshot identified as ${ETCD_RESTORE_PATH}"
 		fi
 		[ -n "${ETCD_RESTORE_PATH}" ] && [ "${ETCD_RESTORE_PATH}" != "null" ] && cfg-set "cluster-reset" "true" && cfg-set "cluster-reset-restore-path" "${ETCD_RESTORE_PATH}" && _log "cluster-reset-restore-path was set to ${ETCD_RESTORE_PATH}"
 		;;
