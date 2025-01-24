@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.0](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v1.0.1...v1.1.0) (2025-01-24)
+
+
+### Features
+
+* construct etcd auto-restore logic ([0b64749](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/0b64749effcb231e0929ac2f51b983f5357125f3))
+
 ## [1.0.1](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v1.0.0...v1.0.1) (2025-01-21)
 
 
