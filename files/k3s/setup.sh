@@ -16,6 +16,7 @@ NODE_LABELS=( $(jq -c -r '.node_labels | to_entries[] | .key + "=" + .value' /et
 NODE_TAINTS=( $(jq -c -r '.node_taints | to_entries[] | .key + "=" + .value' /etc/zadara/k8s.json | sort) )
 [ -e /etc/zadara/etcd_backup.json ] && export ETCD_JSON=( $(jq -c -r 'to_entries[]' /etc/zadara/etcd_backup.json) ) || export ETCD_JSON=()
 [ ${#ETCD_JSON[@]} -gt 0 ] && export ETCD_RESTORE_PATH=$(jq -c -r '.["cluster-reset-restore-path"]' /etc/zadara/etcd_backup.json) || export ETCD_RESTORE_PATH="null"
+ETCD_AUTORESTORE="true"
 export K3S_TOKEN="$(jq -c -r '.cluster_token' /etc/zadara/k8s.json)"
 export K3S_NODE_NAME=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
 export INSTALL_K3S_SKIP_START=true
@@ -67,6 +68,7 @@ case ${CLUSTER_ROLE} in
 			key=$(echo "${entry}" | jq -c -r '.key')
 			val=$(echo "${entry}" | jq -c -r '.value')
 			[[ "${key}" == "cluster-reset-restore-path" ]] && continue
+			[[ "${key}" == "autorestore" ]] && ETCD_AUTORESTORE="${val}"
 			# TODO Validate keys against a whitelist
 			cfg-set "etcd-${key}" "${val}"
 		done
@@ -120,12 +122,13 @@ case "${SETUP_STATE}" in
 	"seed")
 		cfg-set "cluster-init" "true"
 		# Recovery phase
-		if [[ ( ${#ETCD_JSON[@]} -gt 0 ) && ( -z "${ETCD_RESTORE_PATH}" || "${ETCD_RESTORE_PATH}" == "null" ) ]]; then
-			# TODO Add flag to disable restore
-			# TODO Search for latest S3 snapshot, set ETCD_RESTORE_PATH
-			_log "TODO - Looking for oldest etcd snapshot from remote object storage to restore from"
+		if [[ ( ${#ETCD_JSON[@]} -gt 0 ) && ( -z "${ETCD_RESTORE_PATH}" || "${ETCD_RESTORE_PATH}" == "null" ) && ("${ETCD_AUTORESTORE}" == "true") ]]; then
+			_log "Looking for newest etcd snapshot from remote object storage to restore from"
+			ETCD_BACKUPS=$(k3s etcd-snapshot ls -o json 2>/dev/null | jq -c -r '.')
+			LAST_BACKUP=$(echo "${ETCD_BACKUPS}" | jq -c -r '[.items[]|select(.spec.nodeName=="s3")]|sort_by(.status.creationTime)|last')
+			[ -n "${LAST_BACKUP}" ] && [ "${LAST_BACKUP}" != "null" ] && ETCD_RESTORE_PATH=$(echo "${LAST_BACKUP}" | jq -c -r '.spec.snapshotName') && _log "Latest snapshot identified as ${ETCD_RESTORE_PATH}"
 		fi
-		[ -n "${ETCD_RESTORE_PATH}" ] && [ "${ETCD_RESTORE_PATH}" != "null" ] && cfg-set "cluster-reset" "true" && cfg-set "cluster-reset-restore-path" "${ETCD_RESTORE_PATH}"
+		[ -n "${ETCD_RESTORE_PATH}" ] && [ "${ETCD_RESTORE_PATH}" != "null" ] && cfg-set "cluster-reset" "true" && cfg-set "cluster-reset-restore-path" "${ETCD_RESTORE_PATH}" && _log "cluster-reset-restore-path was set to ${ETCD_RESTORE_PATH}"
 		;;
 esac
 
