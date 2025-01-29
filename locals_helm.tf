@@ -30,8 +30,7 @@ locals {
                   "service.beta.kubernetes.io/aws-load-balancer-scheme"                              = "internet-facing"
                   "service.beta.kubernetes.io/aws-load-balancer-type"                                = "external"
                   "service.beta.kubernetes.io/aws-load-balancer-proxy-protocol"                      = "*"
-                  "service.beta.kubernetes.io/aws-load-balancer-manage-backend-security-group-rules" = "false"
-                  "service.beta.kubernetes.io/aws-load-balancer-security-groups"                     = join(", ", concat([aws_security_group.k8s.id], [for obj in aws_security_group.k8s_extra : obj.id]))
+                  "service.beta.kubernetes.io/aws-load-balancer-manage-backend-security-group-rules" = "true"
                 }
                 spec = {
                   externalTrafficPolicy = "Local"
@@ -40,24 +39,6 @@ locals {
               tolerations = [
                 { key = "CriticalAddonsOnly", operator = "Exists" },
               ]
-              #ports = {
-              #  web = {
-              #    proxyProtocol = {
-              #      trustedIPs = sort([for key, obj in data.aws_subnet.selected : obj.cidr_block])
-              #    }
-              #    forwardedHeaders = {
-              #      trustedIPs = sort([for key, obj in data.aws_subnet.selected : obj.cidr_block])
-              #    }
-              #  }
-              #  websecure = {
-              #    proxyProtocol = {
-              #      trustedIPs = sort([for key, obj in data.aws_subnet.selected : obj.cidr_block])
-              #    }
-              #    forwardedHeaders = {
-              #      trustedIPs = sort([for key, obj in data.aws_subnet.selected : obj.cidr_block])
-              #    }
-              #  }
-              #}
             }
           }
         }
