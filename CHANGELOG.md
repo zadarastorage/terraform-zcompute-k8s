@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.1](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v1.1.0...v1.1.1) (2025-01-29)
+
+
+### Bug Fixes
+
+* re-enabling LBC management of backend security group rules ([1cf81c5](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/1cf81c5e67e84132e8074dd2722b732d54321591))
+
 ## [1.1.0](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v1.0.1...v1.1.0) (2025-01-24)
 
 
