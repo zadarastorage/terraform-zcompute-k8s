@@ -100,7 +100,7 @@ locals {
       repository_name = "aws-ebs-csi-driver"
       repository_url  = "https://kubernetes-sigs.github.io/aws-ebs-csi-driver"
       chart           = "aws-ebs-csi-driver"
-      version         = "2.35.0"
+      version         = "2.39.3"
       namespace       = "kube-system"
       config = {
         controller = {
