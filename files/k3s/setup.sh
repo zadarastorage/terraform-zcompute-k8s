@@ -79,6 +79,8 @@ esac
 # Common settings
 cfg-append "kubelet-arg" "cloud-provider=external"
 cfg-append "kubelet-arg" "provider-id=aws:///symphony/${K3S_NODE_NAME}"
+sed -e '/^#.*/d' -e 's/^search.*/search ./g' /run/systemd/resolve/resolv.conf > /etc/rancher/k3s/kubelet.resolv
+cfg-append "kubelet-arg" "resolv-conf=/etc/rancher/k3s/kubelet.resolv"
 [ -e '/etc/rancher/k3s/kubelet.config' ] && cfg-append "kubelet-arg" "config=/etc/rancher/k3s/kubelet.config"
 NODE_TAINTS+=('ebs.csi.aws.com/agent-not-ready=:NoExecute')
 [[ $(lspci -n -d '10de:' | wc -l) -gt 0 ]] && NODE_LABELS+=('k8s.amazonaws.com/accelerator=nvidia-tesla')
