@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.3](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v1.1.2...v1.1.3) (2025-03-04)
+
+
+### Bug Fixes
+
+* configure kubelet to ignore vpc provided search domain ([a242944](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/a242944979fdb0cb8ce1d327c20c028c0028b722))
+
 ## [1.1.2](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v1.1.1...v1.1.2) (2025-01-30)
 
 
