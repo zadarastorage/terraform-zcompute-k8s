@@ -9,8 +9,8 @@ IFS=$'\n'
 # Install AWS CLI
 curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && unzip -qq awscliv2.zip && sudo ./aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update && rm awscliv2.zip && rm -r /aws
 # # Setup adjustments to support EBS CSI
-[ ! -e /etc/udev/rules.d/zadara_disk_mapper.rules ] && wget -q -O /etc/udev/rules.d/zadara_disk_mapper.rules https://raw.githubusercontent.com/zadarastorage/zadara-examples/f1cc7d1fefe654246230e544e2bea9b63329be42/k8s/eksd/eksd-packer/files/zadara_disk_mapper.rules
-[ ! -e /usr/bin/zadara_disk_mapper.py ] && wget -q -O /usr/bin/zadara_disk_mapper.py https://raw.githubusercontent.com/zadarastorage/zadara-examples/f1cc7d1fefe654246230e544e2bea9b63329be42/k8s/eksd/eksd-packer/files/zadara_disk_mapper.py
+[ ! -e /etc/udev/rules.d/zadara_disk_mapper.rules ] && wget -q -O /etc/udev/rules.d/zadara_disk_mapper.rules https://raw.githubusercontent.com/zadarastorage/zadara-examples/874d02e833baaf223cb1e1f40b1d97b0e72cf5cc/k8s/eksd/eksd-packer/files/zadara_disk_mapper.rules
+[ ! -e /usr/bin/zadara_disk_mapper.py ] && wget -q -O /usr/bin/zadara_disk_mapper.py https://raw.githubusercontent.com/zadarastorage/zadara-examples/874d02e833baaf223cb1e1f40b1d97b0e72cf5cc/k8s/eksd/eksd-packer/files/zadara_disk_mapper.py
 chmod 755 /usr/bin/zadara_disk_mapper.py
 [ -e /lib/udev/rules.d/66-snapd-autoimport.rules ] && rm /lib/udev/rules.d/66-snapd-autoimport.rules
 [ -e /lib/systemd/system/systemd-udevd.service ] && sed -i '/IPAddressDeny=any/d' /lib/systemd/system/systemd-udevd.service && systemctl daemon-reload && systemctl restart systemd-udevd && udevadm control --reload-rules && udevadm trigger # TODO Add to whitelist instead of removing Deny rule...
