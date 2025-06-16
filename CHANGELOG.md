@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.4](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v1.1.3...v1.1.4) (2025-06-16)
+
+
+### Bug Fixes
+
+* bump zadara_disk_mapper reference to enable virtio serial parsing ([ef1cd72](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/ef1cd72790d580f101bcbe7e623e4e97a2440c73))
+
 ## [1.1.3](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v1.1.2...v1.1.3) (2025-03-04)
 
 
