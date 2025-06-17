@@ -13,7 +13,7 @@ curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.
 [ ! -e /usr/bin/zadara_disk_mapper.py ] && wget -q -O /usr/bin/zadara_disk_mapper.py https://raw.githubusercontent.com/zadarastorage/zadara-examples/874d02e833baaf223cb1e1f40b1d97b0e72cf5cc/k8s/eksd/eksd-packer/files/zadara_disk_mapper.py
 chmod 755 /usr/bin/zadara_disk_mapper.py
 [ -e /lib/udev/rules.d/66-snapd-autoimport.rules ] && rm /lib/udev/rules.d/66-snapd-autoimport.rules
-[ -e /lib/systemd/system/systemd-udevd.service ] && sed -i '/IPAddressDeny=any/d' /lib/systemd/system/systemd-udevd.service && systemctl daemon-reload && systemctl restart systemd-udevd && udevadm control --reload-rules && udevadm trigger # TODO Add to whitelist instead of removing Deny rule...
+[ -e /lib/systemd/system/systemd-udevd.service ] && sed '/IPAddressDeny=any/d' /lib/systemd/system/systemd-udevd.service > /etc/systemd/system/systemd-udevd.service && systemctl daemon-reload && systemctl restart systemd-udevd && udevadm control --reload-rules && udevadm trigger # TODO Add to whitelist instead of removing Deny rule...
 
 # Disable firewalls
 [ -x "$(which ufw)" ] && ufw disable && systemctl disable ufw && systemctl stop ufw
