@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.5](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v1.1.4...v1.1.5) (2025-06-17)
+
+
+### Bug Fixes
+
+* use systemd drop-in for udevd ([229d434](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/229d43423cea72a965311e630d07c7b53ff05ddd))
+
 ## [1.1.4](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v1.1.3...v1.1.4) (2025-06-16)
 
 
