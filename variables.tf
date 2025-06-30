@@ -1,3 +1,9 @@
+variable "zcompute_endpoint" {
+  description = "zCompute API Endpoint"
+  type        = string
+  default     = "https://cloud.zadara.com"
+}
+
 variable "vpc_id" {
   description = "zCompute VPC ID"
   type        = string

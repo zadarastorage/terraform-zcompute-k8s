@@ -3,7 +3,7 @@ locals {
     common = [
       { order = 0, filename = "write-files-profile-d.yaml", content_type = "text/cloud-config", merge_type = "list(append)+dict(recurse_list,allow_delete)+str()",
         content = templatefile("${path.module}/cloud-init/write-files.tftpl.yaml", { write_files = [
-          { path = "/etc/profile.d/zadara-ec2.sh", owner = "root:root", permissions = "0644", content = file("${path.module}/files/zadara-ec2.sh") },
+          { path = "/etc/profile.d/zadara-ec2.sh", owner = "root:root", permissions = "0644", content = templatefile("${path.module}/files/zadara-ec2.tftpl.sh", { zcompute_endpoint = var.zcompute_endpoint }) },
       ] }) },
       { order = 0, filename = "mount.yaml", content_type = "text/cloud-config", merge_type = "list(append)+dict(recurse_list,allow_delete)+str()", content = file("${path.module}/cloud-init/mount.yaml") },
       { order = 10, filename = "setup-os.sh", content_type = "text/x-shellscript", content = join("\n", [for line in split("\n", file("${path.module}/files/setup-os.sh")) : line if length(regexall("^# .*$", line)) == 0]) },

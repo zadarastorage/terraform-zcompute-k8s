@@ -8,7 +8,9 @@ locals {
       chart           = "zadara-aws-config"
       version         = "0.0.3"
       namespace       = "kube-system"
-      config          = null
+      config = {
+        endpointUrl = var.zcompute_endpoint
+      }
     }
     traefik-elb = {
       order           = 10
@@ -188,8 +190,8 @@ locals {
         enableShield       = false
         enableWaf          = false
         enableWafv2        = false
-        awsApiEndpoints    = "ec2=https://cloud.zadara.com/api/v2/aws/ec2,elasticloadbalancing=https://cloud.zadara.com/api/v2/aws/elbv2,acm=https://cloud.zadara.com/api/v2/aws/acm,sts=https://cloud.zadara.com/api/v2/aws/sts"
-        # 1.8.x+ awsApiEndpoints = "EC2=https://cloud.zadara.com/api/v2/aws/ec2,Elastic Load Balancing v2=https://cloud.zadara.com/api/v2/aws/elbv2,ACM=https://cloud.zadara.com/api/v2/aws/acm,STS=https://cloud.zadara.com/api/v2/aws/sts"
+        awsApiEndpoints    = "ec2=${var.zcompute_endpoint}/api/v2/aws/ec2,elasticloadbalancing=${var.zcompute_endpoint}/api/v2/aws/elbv2,acm=${var.zcompute_endpoint}/api/v2/aws/acm,sts=${var.zcompute_endpoint}/api/v2/aws/sts"
+        # 1.8.x+ awsApiEndpoints = "EC2=${var.zcompute_endpoint}/api/v2/aws/ec2,Elastic Load Balancing v2=${var.zcompute_endpoint}/api/v2/aws/elbv2,ACM=${var.zcompute_endpoint}/api/v2/aws/acm,STS=${var.zcompute_endpoint}/api/v2/aws/sts"
         tolerations = [{ effect = "NoSchedule", key = "", operator = "Exists" }, { effect = "NoExecute", key = "", operator = "Exists" }]
       }
     }
