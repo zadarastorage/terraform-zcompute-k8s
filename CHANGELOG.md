@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v1.2.0...v1.3.0) (2025-06-30)
+
+
+### Features
+
+* add logic for automated cluster recovery from object storage on ([bda2534](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/bda2534e07f2e819d846d759b9b7c049891a68bb))
+* enable overriding the endpoint url for customized sites ([356bbcd](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/356bbcd7d58862441647bf4c6bde591fe473bff2))
+
 ## [1.2.0](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v1.1.5...v1.2.0) (2025-06-30)
 
 
