@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v1.1.5...v1.2.0) (2025-06-30)
+
+
+### Features
+
+* enable etcd snapshot compression by default ([303375c](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/303375c4445449ee3c1530ba58d850e822ec1183))
+* extend default etcd snapshot retention to 168. Should result in 28-day retention on object storage and 84-day retention locally ([887f253](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/887f2537722029d42592a25b9674ec33dbf7388c))
+* preload matching linux kernel modules ([979d27c](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/979d27cc5b3db7ab5617a25450043c2d2e0818fe))
+
 ## [1.1.5](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v1.1.4...v1.1.5) (2025-06-17)
 
 
