@@ -124,15 +124,18 @@ case "${SETUP_STATE}" in
 		cfg-set "server" "https://${CLUSTER_KAPI}:6443"
 		;;
 	"seed")
-		cfg-set "cluster-init" "true"
 		# Recovery phase
 		if [[ ( ${#ETCD_JSON[@]} -gt 0 ) && ( -z "${ETCD_RESTORE_PATH}" || "${ETCD_RESTORE_PATH}" == "null" ) && ("${ETCD_AUTORESTORE}" == "true") ]]; then
-			_log "TODO - Looking for newest etcd snapshot from remote object storage to restore from"
-			#ETCD_BACKUPS=$(k3s etcd-snapshot ls -o json 2>/dev/null | jq -c -r '.')
-			#LAST_BACKUP=$(echo "${ETCD_BACKUPS}" | jq -c -r '[.items[]|select(.spec.nodeName=="s3")]|sort_by(.status.creationTime)|last')
-			#[ -n "${LAST_BACKUP}" ] && [ "${LAST_BACKUP}" != "null" ] && ETCD_RESTORE_PATH=$(echo "${LAST_BACKUP}" | jq -c -r '.spec.snapshotName') && _log "Latest snapshot identified as ${ETCD_RESTORE_PATH}"
+			_log "Looking for newest etcd snapshot from remote object storage to restore from"
+			LAST_BACKUP=$(AWS_ACCESS_KEY_ID=$(jq -r '."s3-access-key"' /etc/zadara/etcd_backup.json) AWS_SECRET_ACCESS_KEY=$(jq -r '."s3-secret-key"' /etc/zadara/etcd_backup.json) aws s3api list-objects-v2 --endpoint-url "https://$(jq -r '."s3-endpoint"' /etc/zadara/etcd_backup.json)" --bucket "$(jq -r '."s3-bucket"'  /etc/zadara/etcd_backup.json)" --prefix "$(jq -r '."s3-folder"'  /etc/zadara/etcd_backup.json)/" --query 'sort_by(Contents,&LastModified)[-1].Key' --output text | awk -F/ '{print $NF}')
+			[ -n "${LAST_BACKUP}" ] && [ "${LAST_BACKUP}" != "null" ] && ETCD_RESTORE_PATH="${LAST_BACKUP}" && _log "Latest snapshot identified as ${ETCD_RESTORE_PATH}"
 		fi
-		[ -n "${ETCD_RESTORE_PATH}" ] && [ "${ETCD_RESTORE_PATH}" != "null" ] && cfg-set "cluster-reset" "true" && cfg-set "cluster-reset-restore-path" "${ETCD_RESTORE_PATH}" && _log "cluster-reset-restore-path was set to ${ETCD_RESTORE_PATH}"
+		if [[ -n "${ETCD_RESTORE_PATH}" && "${ETCD_RESTORE_PATH}" != "null" ]]; then
+			k3s server --cluster-reset --cluster-reset-restore-path=${ETCD_RESTORE_PATH}
+			[ ! -s "/var/lib/rancher/k3s/server/db/snapshots/${ETCD_RESTORE_PATH}" ] && _log "ERROR: /var/lib/rancher/k3s/server/db/snapshots/${ETCD_RESTORE_PATH} was not downloaded or was empty." && systemctl disable k3s && exit 1
+		else
+			cfg-set "cluster-init" "true"
+		fi
 		;;
 esac
 
