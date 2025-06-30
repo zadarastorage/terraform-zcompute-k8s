@@ -62,6 +62,7 @@ case ${CLUSTER_ROLE} in
                 cfg-set "tls-san" "${CLUSTER_KAPI}"
                 cfg-set "flannel-backend" "none"
                 cfg-set "etcd-snapshot-retention" "168"
+                cfg-set "etcd-snapshot-compress" "true"
 		! _gate "enable-cloud-controller" && cfg-set 'disable-cloud-controller' "true"
 		! _gate "enable-servicelb" && cfg-append 'disable' 'servicelb'
 		! _gate "enable-workload-on-controlerplane" && NODE_TAINTS+=('node-role.kubernetes.io/control-plane=:NoSchedule')
