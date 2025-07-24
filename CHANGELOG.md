@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.1](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v1.3.0...v1.3.1) (2025-07-24)
+
+### Bug Fixes
+
+* remove linux-modules-extra-* from auto-install, leave it to users for their specific usecases ([5d98a4f](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/5d98a4fb71e4bd9bfac06743a17e3edcfa35533d))
+
 ## [1.3.0](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v1.2.0...v1.3.0) (2025-06-30)
 
 
