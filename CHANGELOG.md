@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.0](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v1.3.1...v2.0.0) (2025-09-16)
+
+### ⚠ BREAKING CHANGES
+
+* This discards the random_id cluster_token and now
+requires the user to provide one. If cluster_token was not supplied
+by the user previously, the current one should be extracted prior to
+upgrade and configured in the user project.
+
+### Features
+
+* dont coalesce the cluster_token ([cf90efd](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/cf90efdd8a43ac68e77ffada4174a8d006a1ad30))
+
 ## [1.3.1](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v1.3.0...v1.3.1) (2025-07-24)
 
 ### Bug Fixes
