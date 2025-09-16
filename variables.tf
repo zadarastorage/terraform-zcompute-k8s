@@ -27,7 +27,6 @@ variable "cluster_version" {
 variable "cluster_token" {
   description = "Configure the node join token"
   type        = string
-  default     = null
 }
 
 variable "cluster_flavor" {
