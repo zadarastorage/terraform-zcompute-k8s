@@ -106,8 +106,9 @@ module "iam_instance_profile" {
       {
         Effect = "Allow"
         Action = [
-          "ec2:DescribeInstances",
-          "ec2:DescribeTags"
+          "ec2:*",
+          "autoscaling:*",
+          "elasticloadbalancing:*"
         ]
         Resource = "*"
       }
