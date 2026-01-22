@@ -233,6 +233,76 @@ module "k8s" {
 
 - [k8s-simple](./examples/k8s-simple) - Complete working example with VPC data sources, IAM profile, and registry mirror configuration
 
+## Development
+
+### Prerequisites
+
+| Tool | Version | Purpose |
+|------|---------|---------|
+| Terraform | >= 1.0 | Infrastructure as code |
+| tflint | >= 0.50.0 | Terraform linting |
+| terraform-docs | >= 0.16.0 | Documentation generation |
+| pre-commit | >= 3.0.0 | Git hook framework |
+| shellcheck | >= 0.9.0 | Shell script linting |
+| Checkov | >= 3.0.0 | Security scanning |
+
+### Setup
+
+1. Install pre-commit hooks:
+   ```bash
+   make init-hooks
+   ```
+
+   Or manually:
+   ```bash
+   pre-commit install
+   tflint --init
+   ```
+
+2. Verify setup:
+   ```bash
+   make check-all
+   ```
+
+### Pre-commit Hooks
+
+Hooks run automatically on `git commit`:
+- **terraform_fmt** - Formats Terraform files (auto-fix)
+- **terraform_validate** - Validates Terraform syntax
+- **terraform_tflint** - Lints with tflint rules
+- **terraform_docs** - Updates README inputs/outputs
+- **shellcheck** - Lints shell scripts
+
+To run hooks manually:
+```bash
+pre-commit run --all-files
+```
+
+### Local Validation
+
+Run the full CI-equivalent validation suite:
+```bash
+make check-all
+```
+
+Individual targets:
+```bash
+make fmt        # Format Terraform files
+make lint       # Run tflint
+make validate   # Validate configuration
+make docs       # Update documentation
+make security   # Run Checkov security scan
+```
+
+### Code Quality Standards
+
+- All Terraform files must pass `terraform fmt`
+- All Terraform files must pass `tflint` with no warnings
+- All shell scripts must pass `shellcheck`
+- Security scan must pass with documented exceptions only
+
+> **Note:** Using `git commit --no-verify` to skip hooks is discouraged. Hooks ensure code quality and should not be bypassed.
+
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
 
