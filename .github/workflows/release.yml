@@ -1,6 +1,14 @@
 name: Release
 
 on:
+  workflow_call:
+    outputs:
+      new_release_published:
+        description: "Whether a new release was published"
+        value: ${{ jobs.release.outputs.new_release_published }}
+      new_release_version:
+        description: "The new release version"
+        value: ${{ jobs.release.outputs.new_release_version }}
   workflow_dispatch:
   push:
     branches:
@@ -21,6 +29,9 @@ jobs:
     name: Release
     runs-on: ubuntu-latest
     if: github.repository_owner == 'zadarastorage'
+    outputs:
+      new_release_published: ${{ steps.semantic.outputs.new_release_published }}
+      new_release_version: ${{ steps.semantic.outputs.new_release_version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,6 +40,7 @@ jobs:
           fetch-depth: 0
 
       - name: Release
+        id: semantic
         uses: cycjimmy/semantic-release-action@v4
         with:
           semantic_version: 24.2.7
@@ -38,3 +50,56 @@ jobs:
             conventional-changelog-conventionalcommits@9.1.0
         env:
           GITHUB_TOKEN: ${{ github.token }}
+
+  bundle:
+    name: Create Module Bundle
+    needs: release
+    if: needs.release.outputs.new_release_published == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.new_release_version }}
+
+      - name: Create Bundle
+        run: |
+          VERSION="${{ needs.release.outputs.new_release_version }}"
+          BUNDLE_NAME="terraform-zcompute-k8s-${VERSION}"
+
+          # Create clean bundle directory
+          mkdir -p "${BUNDLE_NAME}"
+
+          # Copy module files only (explicit include list)
+          # Core Terraform files
+          cp *.tf "${BUNDLE_NAME}/" 2>/dev/null || true
+
+          # Files directory (shell scripts, templates)
+          if [ -d "files" ]; then
+            cp -r files/ "${BUNDLE_NAME}/"
+          fi
+
+          # Documentation
+          cp README.md "${BUNDLE_NAME}/" 2>/dev/null || true
+          cp LICENSE "${BUNDLE_NAME}/" 2>/dev/null || true
+          cp CHANGELOG.md "${BUNDLE_NAME}/" 2>/dev/null || true
+
+          # Create archives
+          tar -czvf "${BUNDLE_NAME}.tar.gz" "${BUNDLE_NAME}"
+          zip -r "${BUNDLE_NAME}.zip" "${BUNDLE_NAME}"
+
+          # List bundle contents for verification
+          echo "Bundle contents:"
+          tar -tzf "${BUNDLE_NAME}.tar.gz"
+
+      - name: Upload Bundle to Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.release.outputs.new_release_version }}"
+          BUNDLE_NAME="terraform-zcompute-k8s-${VERSION}"
+
+          gh release upload "v${VERSION}" \
+            "${BUNDLE_NAME}.tar.gz" \
+            "${BUNDLE_NAME}.zip" \
+            --clobber
