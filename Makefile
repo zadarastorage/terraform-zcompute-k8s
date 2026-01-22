@@ -1,7 +1,7 @@
 # Makefile for terraform-k8s-zcompute development workflow
 # Run 'make help' for available targets
 
-.PHONY: help init-hooks fmt lint validate test test-verbose test-bats test-bats-debian test-all docs security check-all clean
+.PHONY: help init-hooks fmt lint validate test test-verbose test-bats test-bats-debian test-all test-integration docs security check-all clean
 
 # Default target
 help:
@@ -16,6 +16,7 @@ help:
 	@echo "  test-bats   - Run BATS shell script tests (Ubuntu)"
 	@echo "  test-bats-debian - Run BATS tests (Debian)"
 	@echo "  test-all    - Run all tests (Terraform + BATS)"
+	@echo "  test-integration - Trigger integration tests in CI"
 	@echo "  security    - Run Checkov security scan"
 	@echo "  check-all   - Run all checks (CI parity)"
 	@echo "  clean       - Remove Terraform cache files"
@@ -59,6 +60,20 @@ test-bats-debian:
 
 # Run all tests (Terraform + BATS)
 test-all: test test-bats
+
+# Trigger integration tests in CI
+test-integration:
+	@echo "Integration tests run in CI only (require zCompute infrastructure)"
+	@echo "Use 'gh workflow run integration.yml' to trigger manually"
+	@echo ""
+	@echo "Required secrets:"
+	@echo "  - ZCOMPUTE_ENDPOINT"
+	@echo "  - ZCOMPUTE_ACCESS_KEY"
+	@echo "  - ZCOMPUTE_SECRET_KEY"
+	@echo "  - ZCOMPUTE_VPC_ID"
+	@echo "  - ZCOMPUTE_PRIVATE_SUBNET_IDS"
+	@echo "  - ZCOMPUTE_PUBLIC_SUBNET_ID"
+	@echo "  - ZCOMPUTE_IAM_INSTANCE_PROFILE"
 
 # Update README documentation
 docs:

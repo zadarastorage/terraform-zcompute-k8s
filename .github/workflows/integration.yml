@@ -1,0 +1,373 @@
+# Integration testing workflow
+# Provisions real K3s clusters on zCompute for end-to-end validation
+#
+# Triggers: workflow_dispatch only (release workflow calls this if needed)
+# Secrets required: ZCOMPUTE_* credentials, VPC/subnet configuration
+# Note: Workflow cancellation may leave orphaned infrastructure requiring manual cleanup
+
+name: Integration Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_cleanup:
+        description: 'Skip cleanup (debugging only)'
+        type: boolean
+        default: false
+      config_filter:
+        description: 'Run specific config only (e.g., single-ubuntu)'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: false  # Avoid orphaned infrastructure
+
+env:
+  TF_IN_AUTOMATION: true
+  TF_INPUT: false
+  AWS_DEFAULT_REGION: us-east-1
+
+jobs:
+  integration:
+    name: Test ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    if: github.repository_owner == 'zadarastorage'
+    timeout-minutes: 120
+
+    strategy:
+      fail-fast: false  # Run all configs for complete picture
+      max-parallel: 1   # Sequential to avoid resource conflicts
+      matrix:
+        include:
+          - name: single-ubuntu
+            flavor: k3s-ubuntu
+            control_nodes: 1
+            worker_nodes: 1
+          - name: single-debian
+            flavor: k3s-debian
+            control_nodes: 1
+            worker_nodes: 1
+          - name: ha-ubuntu
+            flavor: k3s-ubuntu
+            control_nodes: 3
+            worker_nodes: 1
+          - name: ha-debian
+            flavor: k3s-debian
+            control_nodes: 3
+            worker_nodes: 1
+
+    steps:
+      - name: Check secrets availability
+        id: secrets
+        run: |
+          if [ -z "${{ secrets.ZCOMPUTE_ACCESS_KEY }}" ]; then
+            echo "::warning::Skipping integration tests - secrets not configured"
+            echo "has_secrets=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_secrets=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip if no secrets
+        if: steps.secrets.outputs.has_secrets != 'true'
+        run: |
+          echo "Integration tests require zCompute credentials."
+          echo "Configure the following repository secrets:"
+          echo "  - ZCOMPUTE_ENDPOINT"
+          echo "  - ZCOMPUTE_ACCESS_KEY"
+          echo "  - ZCOMPUTE_SECRET_KEY"
+          echo "  - ZCOMPUTE_VPC_ID"
+          echo "  - ZCOMPUTE_PRIVATE_SUBNET_IDS"
+          echo "  - ZCOMPUTE_PUBLIC_SUBNET_ID"
+          echo "  - ZCOMPUTE_IAM_INSTANCE_PROFILE"
+          exit 0
+
+      - name: Filter config
+        if: steps.secrets.outputs.has_secrets == 'true' && inputs.config_filter != ''
+        run: |
+          if [ "${{ matrix.name }}" != "${{ inputs.config_filter }}" ]; then
+            echo "Skipping ${{ matrix.name }} (filter: ${{ inputs.config_filter }})"
+            exit 0
+          fi
+
+      - name: Checkout
+        if: steps.secrets.outputs.has_secrets == 'true'
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        if: steps.secrets.outputs.has_secrets == 'true'
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.6"
+          terraform_wrapper: false
+
+      - name: Setup kubectl
+        if: steps.secrets.outputs.has_secrets == 'true'
+        uses: azure/setup-kubectl@v3
+
+      - name: Generate SSH key pair
+        if: steps.secrets.outputs.has_secrets == 'true'
+        id: ssh
+        run: |
+          SSH_DIR="${HOME}/.ssh"
+          mkdir -p "${SSH_DIR}"
+          chmod 700 "${SSH_DIR}"
+
+          ssh-keygen -t ed25519 -f "${SSH_DIR}/integ-test" -N "" -C "integration-test"
+
+          echo "private_key=${SSH_DIR}/integ-test" >> "$GITHUB_OUTPUT"
+          echo "public_key=${SSH_DIR}/integ-test.pub" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform Init
+        if: steps.secrets.outputs.has_secrets == 'true'
+        working-directory: tests/integration
+        run: terraform init
+
+      - name: Create AWS key pair
+        if: steps.secrets.outputs.has_secrets == 'true'
+        id: keypair
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
+          AWS_ENDPOINT_URL: ${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/ec2
+        run: |
+          KEY_NAME="integ-${{ matrix.name }}-${{ github.run_id }}"
+          echo "key_name=${KEY_NAME}" >> "$GITHUB_OUTPUT"
+
+          # Import the generated public key
+          aws ec2 import-key-pair \
+            --key-name "${KEY_NAME}" \
+            --public-key-material fileb://${{ steps.ssh.outputs.public_key }} \
+            --endpoint-url "${AWS_ENDPOINT_URL}" \
+            --no-verify-ssl 2>/dev/null || true
+
+      - name: Terraform Apply
+        if: steps.secrets.outputs.has_secrets == 'true'
+        id: apply
+        working-directory: tests/integration
+        timeout-minutes: 20
+        env:
+          TF_VAR_zcompute_endpoint: ${{ secrets.ZCOMPUTE_ENDPOINT }}
+          TF_VAR_zcompute_access_key: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
+          TF_VAR_zcompute_secret_key: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
+          TF_VAR_vpc_id: ${{ secrets.ZCOMPUTE_VPC_ID }}
+          TF_VAR_private_subnet_ids: ${{ secrets.ZCOMPUTE_PRIVATE_SUBNET_IDS }}
+          TF_VAR_public_subnet_id: ${{ secrets.ZCOMPUTE_PUBLIC_SUBNET_ID }}
+          TF_VAR_iam_instance_profile: ${{ secrets.ZCOMPUTE_IAM_INSTANCE_PROFILE }}
+          TF_VAR_cluster_name: integ-${{ matrix.name }}-${{ github.run_id }}
+          TF_VAR_cluster_flavor: ${{ matrix.flavor }}
+          TF_VAR_control_plane_count: ${{ matrix.control_nodes }}
+          TF_VAR_worker_count: ${{ matrix.worker_nodes }}
+          TF_VAR_ssh_key_name: ${{ steps.keypair.outputs.key_name }}
+        run: |
+          terraform apply -auto-approve -parallelism=5
+
+          # Capture outputs for later steps
+          echo "bastion_ip=$(terraform output -raw bastion_public_ip)" >> "$GITHUB_OUTPUT"
+          echo "lb_dns=$(terraform output -raw control_plane_lb_dns)" >> "$GITHUB_OUTPUT"
+          echo "cluster_name=$(terraform output -raw cluster_name)" >> "$GITHUB_OUTPUT"
+          echo "expected_nodes=$(terraform output -raw expected_node_count)" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for cluster bootstrap
+        if: steps.secrets.outputs.has_secrets == 'true' && steps.apply.outcome == 'success'
+        run: |
+          echo "Waiting 120s for K3s bootstrap..."
+          sleep 120
+
+      - name: Get kubeconfig via bastion
+        if: steps.secrets.outputs.has_secrets == 'true' && steps.apply.outcome == 'success'
+        env:
+          BASTION_IP: ${{ steps.apply.outputs.bastion_ip }}
+          LB_DNS: ${{ steps.apply.outputs.lb_dns }}
+          SSH_KEY: ${{ steps.ssh.outputs.private_key }}
+        run: |
+          mkdir -p "${HOME}/.kube"
+
+          # Configure SSH
+          cat > "${HOME}/.ssh/config" << EOF
+          Host bastion
+            HostName ${BASTION_IP}
+            User ubuntu
+            IdentityFile ${SSH_KEY}
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+
+          Host control
+            HostName 10.*
+            User ubuntu
+            IdentityFile ${SSH_KEY}
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            ProxyJump bastion
+          EOF
+
+          chmod 600 "${HOME}/.ssh/config"
+
+          # Wait for bastion to be reachable
+          echo "Waiting for bastion to be reachable..."
+          for i in {1..30}; do
+            if ssh -o ConnectTimeout=5 bastion "echo OK" 2>/dev/null; then
+              echo "Bastion is reachable"
+              break
+            fi
+            echo "Attempt $i/30: bastion not ready, waiting..."
+            sleep 10
+          done
+
+          # Get control plane instance IP via bastion
+          echo "Finding control plane instance..."
+          CONTROL_IP=$(ssh bastion "aws ec2 describe-instances \
+            --filters 'Name=tag:Name,Values=*control*' 'Name=instance-state-name,Values=running' \
+            --query 'Reservations[0].Instances[0].PrivateIpAddress' \
+            --output text \
+            --endpoint-url '${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/ec2' \
+            --no-verify-ssl 2>/dev/null" || echo "")
+
+          if [ -z "${CONTROL_IP}" ] || [ "${CONTROL_IP}" = "None" ]; then
+            echo "Could not find control plane IP, using LB DNS for kubeconfig"
+            CONTROL_IP="${LB_DNS}"
+          fi
+
+          echo "Control plane IP: ${CONTROL_IP}"
+
+          # Fetch kubeconfig through bastion
+          echo "Fetching kubeconfig..."
+          for i in {1..30}; do
+            if ssh -o ProxyJump=bastion -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i "${SSH_KEY}" "ubuntu@${CONTROL_IP}" \
+              "sudo cat /etc/rancher/k3s/k3s.yaml" > "${HOME}/.kube/config" 2>/dev/null; then
+              if [ -s "${HOME}/.kube/config" ]; then
+                echo "Got kubeconfig"
+                break
+              fi
+            fi
+            echo "Attempt $i/30: kubeconfig not ready, waiting..."
+            sleep 10
+          done
+
+          # Replace localhost with LB DNS
+          sed -i "s|server: https://127.0.0.1:6443|server: https://${LB_DNS}:6443|g" "${HOME}/.kube/config"
+
+          # Verify kubeconfig
+          cat "${HOME}/.kube/config" | head -5
+          echo "Kubeconfig ready"
+
+      - name: Wait for nodes ready
+        if: steps.secrets.outputs.has_secrets == 'true' && steps.apply.outcome == 'success'
+        env:
+          EXPECTED_NODES: ${{ steps.apply.outputs.expected_nodes }}
+        run: |
+          echo "Waiting for ${EXPECTED_NODES} nodes to be ready..."
+
+          # Wait for all nodes to register and be ready
+          kubectl wait --for=condition=Ready nodes --all --timeout=600s || {
+            echo "Node wait timed out, checking status..."
+            kubectl get nodes -o wide
+            exit 1
+          }
+
+          # Verify node count
+          READY_NODES=$(kubectl get nodes --no-headers | grep -c " Ready" || echo "0")
+          echo "Ready nodes: ${READY_NODES}/${EXPECTED_NODES}"
+
+          if [ "${READY_NODES}" -lt "${EXPECTED_NODES}" ]; then
+            echo "::error::Expected ${EXPECTED_NODES} nodes, got ${READY_NODES}"
+            kubectl get nodes -o wide
+            exit 1
+          fi
+
+          echo "All nodes ready"
+          kubectl get nodes -o wide
+
+      - name: Wait for system pods
+        if: steps.secrets.outputs.has_secrets == 'true' && steps.apply.outcome == 'success'
+        run: |
+          echo "Waiting for system pods..."
+
+          # Wait for critical system pods
+          kubectl wait --for=condition=Ready pods --all -n kube-system --timeout=300s || {
+            echo "System pod wait timed out, checking status..."
+            kubectl get pods -n kube-system
+            exit 1
+          }
+
+          echo "All system pods ready"
+          kubectl get pods -n kube-system
+
+      - name: Deploy test workload
+        if: steps.secrets.outputs.has_secrets == 'true' && steps.apply.outcome == 'success'
+        run: |
+          echo "Deploying test workload..."
+
+          # Create nginx deployment
+          kubectl create deployment nginx --image=nginx:alpine
+
+          # Wait for rollout
+          kubectl rollout status deployment/nginx --timeout=120s
+
+          # Verify pod is running
+          kubectl wait --for=condition=Ready pod -l app=nginx --timeout=60s
+
+          echo "Test workload deployed successfully"
+          kubectl get pods -l app=nginx
+
+          # Cleanup test workload
+          echo "Cleaning up test workload..."
+          kubectl delete deployment nginx
+
+      - name: Test summary
+        if: steps.secrets.outputs.has_secrets == 'true' && steps.apply.outcome == 'success'
+        run: |
+          echo "## Integration Test: ${{ matrix.name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Property | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Cluster | ${{ steps.apply.outputs.cluster_name }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Flavor | ${{ matrix.flavor }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Control Nodes | ${{ matrix.control_nodes }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Worker Nodes | ${{ matrix.worker_nodes }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Status | Passed |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cleanup AWS key pair
+        if: always() && steps.secrets.outputs.has_secrets == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
+          AWS_ENDPOINT_URL: ${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/ec2
+        run: |
+          KEY_NAME="integ-${{ matrix.name }}-${{ github.run_id }}"
+          aws ec2 delete-key-pair \
+            --key-name "${KEY_NAME}" \
+            --endpoint-url "${AWS_ENDPOINT_URL}" \
+            --no-verify-ssl 2>/dev/null || true
+
+      - name: Terraform Destroy
+        if: always() && steps.secrets.outputs.has_secrets == 'true' && !inputs.skip_cleanup
+        working-directory: tests/integration
+        env:
+          TF_VAR_zcompute_endpoint: ${{ secrets.ZCOMPUTE_ENDPOINT }}
+          TF_VAR_zcompute_access_key: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
+          TF_VAR_zcompute_secret_key: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
+          TF_VAR_vpc_id: ${{ secrets.ZCOMPUTE_VPC_ID }}
+          TF_VAR_private_subnet_ids: ${{ secrets.ZCOMPUTE_PRIVATE_SUBNET_IDS }}
+          TF_VAR_public_subnet_id: ${{ secrets.ZCOMPUTE_PUBLIC_SUBNET_ID }}
+          TF_VAR_iam_instance_profile: ${{ secrets.ZCOMPUTE_IAM_INSTANCE_PROFILE }}
+          TF_VAR_cluster_name: integ-${{ matrix.name }}-${{ github.run_id }}
+          TF_VAR_cluster_flavor: ${{ matrix.flavor }}
+          TF_VAR_control_plane_count: ${{ matrix.control_nodes }}
+          TF_VAR_worker_count: ${{ matrix.worker_nodes }}
+          TF_VAR_ssh_key_name: ${{ steps.keypair.outputs.key_name }}
+        run: |
+          echo "Cleaning up infrastructure..."
+          for i in 1 2 3; do
+            if terraform destroy -auto-approve -parallelism=5; then
+              echo "Cleanup successful on attempt $i"
+              exit 0
+            fi
+            echo "Cleanup attempt $i failed, retrying in 30s..."
+            sleep 30
+          done
+          echo "::warning::Cleanup failed after 3 attempts. Manual cleanup may be required."
