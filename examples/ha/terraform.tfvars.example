@@ -1,0 +1,57 @@
+# High Availability K3s Cluster Example - Variable Values
+# Copy this file to terraform.tfvars and fill in your values
+
+# -----------------------------------------------------------------------------
+# zCompute Provider Configuration
+# -----------------------------------------------------------------------------
+
+zcompute_endpoint   = "https://cloud.zadara.com"
+zcompute_access_key = "your-access-key"
+zcompute_secret_key = "your-secret-key"
+region              = "us-east-1"
+
+# -----------------------------------------------------------------------------
+# Network Configuration
+# Use subnets across multiple availability zones for HA
+# -----------------------------------------------------------------------------
+
+vpc_id     = "vpc-xxxxxxxxx"
+subnet_ids = ["subnet-xxxxxxxxx", "subnet-yyyyyyyyy", "subnet-zzzzzzzzz"]
+
+# -----------------------------------------------------------------------------
+# Cluster Configuration
+# -----------------------------------------------------------------------------
+
+# Generate with: openssl rand -hex 16
+cluster_token = "your-secure-cluster-token-min-16-chars"
+
+# OS flavor: "k3s-ubuntu" or "k3s-debian"
+cluster_flavor = "k3s-ubuntu"
+
+# -----------------------------------------------------------------------------
+# etcd Backup Configuration (Optional)
+# Enable for disaster recovery with S3-compatible storage
+# -----------------------------------------------------------------------------
+
+etcd_backup_enabled    = false
+etcd_backup_endpoint   = "https://s3.example.com"
+etcd_backup_bucket     = "etcd-backups"
+etcd_backup_access_key = "backup-access-key"
+etcd_backup_secret_key = "backup-secret-key"
+
+# -----------------------------------------------------------------------------
+# Node Configuration
+# -----------------------------------------------------------------------------
+
+iam_instance_profile = "k3s-node-profile"
+key_pair_name        = "my-ssh-key"
+
+# -----------------------------------------------------------------------------
+# Optional Configuration
+# -----------------------------------------------------------------------------
+
+name_prefix = "k3s-ha"
+tags = {
+  Environment = "production"
+  Project     = "k3s-ha-example"
+}
