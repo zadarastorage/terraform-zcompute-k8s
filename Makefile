@@ -70,10 +70,6 @@ test-integration:
 	@echo "  - ZCOMPUTE_ENDPOINT"
 	@echo "  - ZCOMPUTE_ACCESS_KEY"
 	@echo "  - ZCOMPUTE_SECRET_KEY"
-	@echo "  - ZCOMPUTE_VPC_ID"
-	@echo "  - ZCOMPUTE_PRIVATE_SUBNET_IDS"
-	@echo "  - ZCOMPUTE_PUBLIC_SUBNET_ID"
-	@echo "  - ZCOMPUTE_IAM_INSTANCE_PROFILE"
 
 # Update README documentation
 docs:
