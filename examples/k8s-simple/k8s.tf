@@ -9,6 +9,12 @@ variable "k8s_version" {
   default     = "1.31.2"
 }
 
+variable "k8s_token" {
+  type        = string
+  description = "Shared secret token for cluster join. Min 16 chars."
+  sensitive   = true
+}
+
 module "k8s" {
   # tflint-ignore: terraform_module_pinned_source
   source = "github.com/zadarastorage/terraform-zcompute-k8s?ref=main"
@@ -21,6 +27,7 @@ module "k8s" {
 
   cluster_name    = var.k8s_name
   cluster_version = var.k8s_version
+  cluster_token   = var.k8s_token
 
   node_group_defaults = {
     cluster_flavor       = "k3s-ubuntu"
