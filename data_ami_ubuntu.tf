@@ -35,7 +35,7 @@ locals {
 
 data "aws_ami_ids" "ubuntu" {
   count      = length(local.ubuntu_lts)
-  owners     = ["*"]
+  owners     = length(var.trusted_ami_owners) > 0 ? var.trusted_ami_owners : ["*"]
   name_regex = "^${local.ubuntu_lts[count.index].regex}$"
 
   filter {

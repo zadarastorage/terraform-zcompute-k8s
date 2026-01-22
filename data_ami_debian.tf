@@ -25,7 +25,7 @@ locals {
 
 data "aws_ami_ids" "debian" {
   count      = length(local.debian_lts)
-  owners     = ["*"]
+  owners     = length(var.trusted_ami_owners) > 0 ? var.trusted_ami_owners : ["*"]
   name_regex = "^${local.debian_lts[count.index].regex}$"
 
   filter {
