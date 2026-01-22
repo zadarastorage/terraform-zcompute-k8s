@@ -1,8 +1,4 @@
 locals {
-  asg_tags = [
-    for k, v in local.tags :
-    { "key" : k, "value" : v, "propagate_at_launch" = true }
-  ]
   asg_control_tags = {
     "kubernetes.io/cluster/${var.cluster_name}" : "owned",
     "zadara.com/k8s/role" : "control",
@@ -35,7 +31,7 @@ resource "aws_autoscaling_group" "control" {
       { for k, v in try(each.value.k8s_labels, {}) : "k8s.io/cluster-autoscaler/node-template/label/${k}" => v },
       local.tags,
       local.asg_control_tags,
-      { "zadara.com/k8s/node_group" : "${each.key}", "zadara.com/k8s/control_plane_group" : "${var.cluster_name}-${each.key}" },
+      { "zadara.com/k8s/node_group" : each.key, "zadara.com/k8s/control_plane_group" : "${var.cluster_name}-${each.key}" },
       each.value.tags,
     )
     content {
@@ -67,7 +63,7 @@ resource "aws_autoscaling_group" "worker" {
       { for k, v in try(each.value.k8s_labels, {}) : "k8s.io/cluster-autoscaler/node-template/label/${k}" => v },
       local.tags,
       local.asg_worker_tags,
-      { "zadara.com/k8s/node_group" : "${each.key}", "zadara.com/k8s/control_plane_group" : "${aws_autoscaling_group.control[keys(aws_autoscaling_group.control)[0]].name}" },
+      { "zadara.com/k8s/node_group" : each.key, "zadara.com/k8s/control_plane_group" : aws_autoscaling_group.control[keys(aws_autoscaling_group.control)[0]].name },
       each.value.tags,
     )
     content {

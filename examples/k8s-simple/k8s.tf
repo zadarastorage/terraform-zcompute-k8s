@@ -10,6 +10,7 @@ variable "k8s_version" {
 }
 
 module "k8s" {
+  # tflint-ignore: terraform_module_pinned_source
   source = "github.com/zadarastorage/terraform-zcompute-k8s?ref=main"
   # It's recommended to change `main` to a specific release version to prevent unexpected changes
 

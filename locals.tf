@@ -3,11 +3,6 @@ locals {
     var.tags,
   )
 
-  tags_list = [
-    for k, v in local.tags :
-    { "key" : k, "value" : v }
-  ]
-
   node_group_defaults = {
     enabled          = true
     desired_capacity = 0

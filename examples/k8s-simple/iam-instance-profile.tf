@@ -1,4 +1,5 @@
 module "iam-instance-profile" {
+  # tflint-ignore: terraform_module_pinned_source
   source = "github.com/zadarastorage/terraform-zcompute-iam-instance-profile?ref=main"
   # It's recommended to change `main` to a specific release version to prevent unexpected changes
 
