@@ -1,0 +1,26 @@
+# Example terraform.tfvars for integration tests
+# Copy this file and fill in actual values for local testing
+
+# zCompute Connection (required)
+zcompute_endpoint   = "https://compute-us-west-101.zadara.com"
+zcompute_access_key = "your-access-key"
+zcompute_secret_key = "your-secret-key"
+
+# Network Configuration (required)
+vpc_id             = "vpc-12345678"
+private_subnet_ids = ["subnet-aaaa1111", "subnet-bbbb2222"]
+public_subnet_id   = "subnet-cccc3333"
+
+# Cluster Configuration
+cluster_name        = "integ-test"
+cluster_flavor      = "k3s-ubuntu"
+control_plane_count = 1
+worker_count        = 1
+
+# Instance Configuration (required)
+ssh_key_name         = "my-ssh-key"
+iam_instance_profile = "k8s-node-profile"
+
+# Bastion Configuration
+bastion_enabled         = true
+bastion_ssh_source_cidr = "0.0.0.0/0"
