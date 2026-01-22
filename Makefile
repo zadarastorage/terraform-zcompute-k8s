@@ -1,7 +1,7 @@
 # Makefile for terraform-k8s-zcompute development workflow
 # Run 'make help' for available targets
 
-.PHONY: help init-hooks fmt lint validate test test-verbose docs security check-all clean
+.PHONY: help init-hooks fmt lint validate test test-verbose test-bats test-bats-debian test-all docs security check-all clean
 
 # Default target
 help:
@@ -13,6 +13,9 @@ help:
 	@echo "  docs        - Update README with terraform-docs"
 	@echo "  test        - Run Terraform tests"
 	@echo "  test-verbose- Run Terraform tests with verbose output"
+	@echo "  test-bats   - Run BATS shell script tests (Ubuntu)"
+	@echo "  test-bats-debian - Run BATS tests (Debian)"
+	@echo "  test-all    - Run all tests (Terraform + BATS)"
 	@echo "  security    - Run Checkov security scan"
 	@echo "  check-all   - Run all checks (CI parity)"
 	@echo "  clean       - Remove Terraform cache files"
@@ -44,6 +47,19 @@ test:
 test-verbose:
 	terraform test -test-directory=tests/unit -verbose
 
+# Run BATS shell script tests (Ubuntu)
+test-bats:
+	docker build -t bats-test -f tests/Dockerfile .
+	docker run --rm -v "$$(pwd):/workspace" bats-test tests/bats/
+
+# Run BATS shell script tests (Debian)
+test-bats-debian:
+	docker build -t bats-test-debian -f tests/Dockerfile --build-arg BASE_IMAGE=debian:12 .
+	docker run --rm -v "$$(pwd):/workspace" bats-test-debian tests/bats/
+
+# Run all tests (Terraform + BATS)
+test-all: test test-bats
+
 # Update README documentation
 docs:
 	terraform-docs .
@@ -53,7 +69,7 @@ security:
 	checkov -d . --config-file .checkov.yaml
 
 # Run all checks (CI parity)
-check-all: fmt validate test lint docs security
+check-all: fmt validate test test-bats lint docs security
 	@echo ""
 	@echo "All checks passed!"
 

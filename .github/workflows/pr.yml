@@ -266,3 +266,76 @@ jobs:
       - name: Fail if Tests Failed
         if: steps.test.outputs.exit_code != '0'
         run: exit 1
+
+  bats-test:
+    name: BATS Shell Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Ubuntu Test Container
+        run: docker build -t bats-test -f tests/Dockerfile .
+
+      - name: Run BATS Tests (Ubuntu)
+        id: bats-ubuntu
+        run: |
+          docker run --rm \
+            -v "${PWD}:/workspace" \
+            bats-test \
+            --formatter tap \
+            tests/bats/ 2>&1 | tee bats-ubuntu-output.txt
+          BATS_EXIT_CODE=${PIPESTATUS[0]}
+          echo "exit_code=$BATS_EXIT_CODE" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: Build Debian Test Container
+        run: docker build -t bats-test-debian -f tests/Dockerfile --build-arg BASE_IMAGE=debian:12 .
+
+      - name: Run BATS Tests (Debian)
+        id: bats-debian
+        run: |
+          docker run --rm \
+            -v "${PWD}:/workspace" \
+            bats-test-debian \
+            --formatter tap \
+            tests/bats/ 2>&1 | tee bats-debian-output.txt
+          BATS_EXIT_CODE=${PIPESTATUS[0]}
+          echo "exit_code=$BATS_EXIT_CODE" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: Upload Test Output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bats-test-output
+          path: |
+            bats-ubuntu-output.txt
+            bats-debian-output.txt
+          retention-days: 7
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## BATS Shell Script Tests"
+            echo ""
+            echo "| OS | Status |"
+            echo "|-----|--------|"
+            if [ "${{ steps.bats-ubuntu.outputs.exit_code }}" = "0" ]; then
+              echo "| Ubuntu 22.04 | Passed |"
+            else
+              echo "| Ubuntu 22.04 | Failed |"
+            fi
+            if [ "${{ steps.bats-debian.outputs.exit_code }}" = "0" ]; then
+              echo "| Debian 12 | Passed |"
+            else
+              echo "| Debian 12 | Failed |"
+            fi
+            echo ""
+            echo "**Coverage:** setup.sh, setup-helm.sh, wait-for-instance-profile.sh, setup-os.sh"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if Tests Failed
+        if: steps.bats-ubuntu.outputs.exit_code != '0' || steps.bats-debian.outputs.exit_code != '0'
+        run: exit 1
