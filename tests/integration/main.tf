@@ -64,14 +64,66 @@ locals {
 }
 
 # -----------------------------------------------------------------------------
+# VPC Infrastructure (self-contained)
+# -----------------------------------------------------------------------------
+
+module "vpc" {
+  # tflint-ignore: terraform_module_pinned_source
+  source = "github.com/zadarastorage/terraform-zcompute-vpc?ref=main"
+
+  name = local.cluster_name
+  cidr = var.vpc_cidr
+
+  azs             = [var.availability_zone]
+  public_subnets  = [var.public_subnet_cidr]
+  private_subnets = [var.private_subnet_cidr]
+
+  enable_nat_gateway      = true
+  single_nat_gateway      = true
+  enable_dns_hostnames    = true
+  enable_dns_support      = true
+  map_public_ip_on_launch = true
+
+  tags = {
+    Environment = "integration-test"
+    TestRun     = var.cluster_name
+  }
+}
+
+# -----------------------------------------------------------------------------
+# IAM Instance Profile (self-contained)
+# -----------------------------------------------------------------------------
+
+module "iam_instance_profile" {
+  # tflint-ignore: terraform_module_pinned_source
+  source = "github.com/zadarastorage/terraform-zcompute-iam-instance-profile?ref=main"
+
+  name = "${local.cluster_name}-k3s-node"
+
+  policy_contents = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ec2:DescribeInstances",
+          "ec2:DescribeTags"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# -----------------------------------------------------------------------------
 # K3s Module
 # -----------------------------------------------------------------------------
 
 module "k3s" {
   source = "../.."
 
-  vpc_id  = var.vpc_id
-  subnets = var.private_subnet_ids
+  vpc_id  = module.vpc.vpc_id
+  subnets = module.vpc.private_subnets
 
   cluster_name    = local.cluster_name
   cluster_version = "1.31.2"
@@ -82,7 +134,7 @@ module "k3s" {
   etcd_backup = null
 
   node_group_defaults = {
-    iam_instance_profile = var.iam_instance_profile
+    iam_instance_profile = module.iam_instance_profile.instance_profile_name
     key_name             = var.ssh_key_name
     root_volume_size     = 64
     security_group_rules = {
@@ -148,7 +200,7 @@ resource "aws_security_group" "bastion" {
   count       = var.bastion_enabled ? 1 : 0
   name        = "${local.cluster_name}-bastion"
   description = "Bastion host security group for ${local.cluster_name}"
-  vpc_id      = var.vpc_id
+  vpc_id      = module.vpc.vpc_id
 
   tags = {
     Name        = "${local.cluster_name}-bastion"
@@ -174,7 +226,7 @@ resource "aws_instance" "bastion" {
   ami           = data.aws_ami.bastion[0].id
   instance_type = "z2.large"
   key_name      = var.ssh_key_name
-  subnet_id     = var.public_subnet_id
+  subnet_id     = module.vpc.public_subnets[0]
 
   vpc_security_group_ids = [
     aws_security_group.bastion[0].id,

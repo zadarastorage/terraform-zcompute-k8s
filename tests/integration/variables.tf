@@ -21,23 +21,31 @@ variable "zcompute_secret_key" {
 }
 
 # -----------------------------------------------------------------------------
-# Network Configuration
+# Network Configuration (self-contained)
 # -----------------------------------------------------------------------------
 
-variable "vpc_id" {
-  description = "VPC ID for cluster deployment"
+variable "vpc_cidr" {
+  description = "CIDR block for test VPC"
   type        = string
+  default     = "10.0.0.0/16"
 }
 
-variable "private_subnet_ids" {
-  description = "List of private subnet IDs for K3s nodes"
-  type        = list(string)
+variable "public_subnet_cidr" {
+  description = "CIDR block for public subnet"
+  type        = string
+  default     = "10.0.1.0/24"
 }
 
-variable "public_subnet_id" {
-  description = "Public subnet ID for bastion host (optional, required if bastion_enabled)"
+variable "private_subnet_cidr" {
+  description = "CIDR block for private subnet"
   type        = string
-  default     = ""
+  default     = "10.0.10.0/24"
+}
+
+variable "availability_zone" {
+  description = "Availability zone for subnets (must exist in zCompute region)"
+  type        = string
+  default     = "symphony"
 }
 
 # -----------------------------------------------------------------------------
@@ -80,11 +88,6 @@ variable "worker_count" {
 
 variable "ssh_key_name" {
   description = "Name of existing SSH key pair for node access"
-  type        = string
-}
-
-variable "iam_instance_profile" {
-  description = "IAM instance profile name for K3s nodes"
   type        = string
 }
 

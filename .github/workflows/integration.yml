@@ -2,7 +2,7 @@
 # Provisions real K3s clusters on zCompute for end-to-end validation
 #
 # Triggers: workflow_dispatch only (release workflow calls this if needed)
-# Secrets required: ZCOMPUTE_* credentials, VPC/subnet configuration
+# Secrets required: ZCOMPUTE_ENDPOINT, ZCOMPUTE_ACCESS_KEY, ZCOMPUTE_SECRET_KEY
 # Note: Workflow cancellation may leave orphaned infrastructure requiring manual cleanup
 
 name: Integration Tests
@@ -79,10 +79,6 @@ jobs:
           echo "  - ZCOMPUTE_ENDPOINT"
           echo "  - ZCOMPUTE_ACCESS_KEY"
           echo "  - ZCOMPUTE_SECRET_KEY"
-          echo "  - ZCOMPUTE_VPC_ID"
-          echo "  - ZCOMPUTE_PRIVATE_SUBNET_IDS"
-          echo "  - ZCOMPUTE_PUBLIC_SUBNET_ID"
-          echo "  - ZCOMPUTE_IAM_INSTANCE_PROFILE"
           exit 0
 
       - name: Filter config
@@ -153,10 +149,6 @@ jobs:
           TF_VAR_zcompute_endpoint: ${{ secrets.ZCOMPUTE_ENDPOINT }}
           TF_VAR_zcompute_access_key: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
           TF_VAR_zcompute_secret_key: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
-          TF_VAR_vpc_id: ${{ secrets.ZCOMPUTE_VPC_ID }}
-          TF_VAR_private_subnet_ids: ${{ secrets.ZCOMPUTE_PRIVATE_SUBNET_IDS }}
-          TF_VAR_public_subnet_id: ${{ secrets.ZCOMPUTE_PUBLIC_SUBNET_ID }}
-          TF_VAR_iam_instance_profile: ${{ secrets.ZCOMPUTE_IAM_INSTANCE_PROFILE }}
           TF_VAR_cluster_name: integ-${{ matrix.name }}-${{ github.run_id }}
           TF_VAR_cluster_flavor: ${{ matrix.flavor }}
           TF_VAR_control_plane_count: ${{ matrix.control_nodes }}
@@ -351,10 +343,6 @@ jobs:
           TF_VAR_zcompute_endpoint: ${{ secrets.ZCOMPUTE_ENDPOINT }}
           TF_VAR_zcompute_access_key: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
           TF_VAR_zcompute_secret_key: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
-          TF_VAR_vpc_id: ${{ secrets.ZCOMPUTE_VPC_ID }}
-          TF_VAR_private_subnet_ids: ${{ secrets.ZCOMPUTE_PRIVATE_SUBNET_IDS }}
-          TF_VAR_public_subnet_id: ${{ secrets.ZCOMPUTE_PUBLIC_SUBNET_ID }}
-          TF_VAR_iam_instance_profile: ${{ secrets.ZCOMPUTE_IAM_INSTANCE_PROFILE }}
           TF_VAR_cluster_name: integ-${{ matrix.name }}-${{ github.run_id }}
           TF_VAR_cluster_flavor: ${{ matrix.flavor }}
           TF_VAR_control_plane_count: ${{ matrix.control_nodes }}
