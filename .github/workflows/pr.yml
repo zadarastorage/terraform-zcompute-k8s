@@ -1,0 +1,215 @@
+# PR validation workflow
+# Runs automated checks on all pull requests to main branch
+# Fork-safe design - no secrets required for any checks
+
+name: PR Validation
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+concurrency:
+  group: pr-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+  security-events: write
+
+jobs:
+  fmt:
+    name: Terraform Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.0"
+
+      - name: Check Format
+        id: fmt
+        run: terraform fmt -check -recursive -diff
+        continue-on-error: true
+
+      - name: Format Result
+        if: steps.fmt.outcome == 'failure'
+        run: |
+          echo "::error::Terraform files are not properly formatted"
+          echo "Run 'make fmt' or 'terraform fmt -recursive' to fix"
+          exit 1
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            if [ "${{ steps.fmt.outcome }}" = "success" ]; then
+              echo "## Terraform Format Check"
+              echo "All files are properly formatted."
+            else
+              echo "## Terraform Format Check"
+              echo "Some files need formatting. Run \`make fmt\` or \`terraform fmt -recursive\` to fix."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  validate:
+    name: Terraform Validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.0"
+
+      - name: Terraform Init
+        run: terraform init -backend=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Terraform Validation"
+            echo "Root module validated successfully."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  validate-examples:
+    name: Validate Examples
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.0"
+
+      - name: Validate All Examples
+        id: validate
+        run: |
+          EXAMPLES=(
+            "examples/minimal"
+            "examples/complete"
+            "examples/ha"
+            "examples/minimal-ubuntu"
+            "examples/minimal-debian"
+            "examples/minimal-mixed"
+            "examples/k8s-simple"
+          )
+
+          FAILED=0
+          RESULTS=""
+
+          for dir in "${EXAMPLES[@]}"; do
+            echo "=== Validating $dir ==="
+            if [ -d "$dir" ]; then
+              cd "$dir"
+              if terraform init -backend=false > /dev/null 2>&1 && terraform validate; then
+                RESULTS="$RESULTS\n| $dir | Passed |"
+                echo "Passed: $dir"
+              else
+                RESULTS="$RESULTS\n| $dir | Failed |"
+                echo "Failed: $dir"
+                FAILED=1
+              fi
+              cd - > /dev/null
+            else
+              RESULTS="$RESULTS\n| $dir | Not Found |"
+              echo "Not found: $dir"
+              FAILED=1
+            fi
+          done
+
+          {
+            echo "RESULTS<<EOF"
+            echo -e "$RESULTS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          exit "$FAILED"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Example Validation"
+            echo ""
+            echo "| Example | Status |"
+            echo "|---------|--------|"
+            echo "${{ steps.validate.outputs.RESULTS }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  tflint:
+    name: TFLint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v6
+        with:
+          tflint_version: latest
+
+      - name: Init TFLint
+        run: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Run TFLint
+        id: tflint
+        run: tflint --recursive --minimum-failure-severity=warning -f compact
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## TFLint"
+            echo ""
+            echo "Linting completed using \`.tflint.hcl\` configuration."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  security:
+    name: Security Scan (Checkov)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Checkov
+        id: checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          config_file: .checkov.yaml
+          output_format: cli,sarif
+          output_file_path: console,results.sarif
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+        continue-on-error: true
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Security Scan (Checkov)"
+            echo ""
+            echo "Scan completed using \`.checkov.yaml\` configuration."
+            echo ""
+            echo "Results uploaded to Security tab (if available)."
+          } >> "$GITHUB_STEP_SUMMARY"
