@@ -1,0 +1,8 @@
+# tfsec security scanning configuration
+# https://aquasecurity.github.io/tfsec/
+
+minimum_severity: MEDIUM
+
+# Exclude checks only with documented justification
+# Format: "CHECK_ID: expiration_date - Justification"
+exclude: []

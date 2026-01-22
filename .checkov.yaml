@@ -1,0 +1,38 @@
+# Checkov security scanning configuration
+# https://www.checkov.io/2.Basics/CLI%20Command%20Reference.html
+
+framework:
+  - terraform
+  - secrets
+
+directory:
+  - .
+
+# Skip checks only with documented justification
+# Format: CKV_CHECK_ID # Justification
+skip-check:
+  # Module design limitations - require user configuration or architectural changes
+  - CKV_AWS_79  # IMDSv2: Launch config metadata_options not configurable by users yet; zCompute compatibility unclear
+  - CKV_AWS_290 # IAM wildcard actions: Module provides baseline policies; users can restrict via node_group_defaults
+  - CKV_AWS_355 # IAM wildcard resources: Same as CKV_AWS_290; module provides baseline policies
+  - CKV_AWS_150 # LB deletion protection: Intentionally disabled for dev/test flexibility; can be added via future variable
+  - CKV_AWS_91  # LB access logging: Requires S3 bucket configuration; future enhancement
+  - CKV_AWS_152 # Cross-zone LB: zCompute single-zone deployments don't benefit; adds cost
+  - CKV2_AWS_15 # ELB health checks: ASG uses EC2 health checks; ELB checks require target group health config
+  - CKV2_AWS_41 # IAM role on EC2: Example file only (examples/k8s-simple/bastion.tf); not core module
+  # Example file checks - not applicable to core module
+  - CKV_TF_1   # Module commit hash: Examples use ref=main for latest; users should pin in production
+  - CKV_TF_2   # Module version tag: Examples use ref=main for latest; users should pin in production
+  - CKV_AWS_135 # EBS optimized: Example bastion instance; not applicable to zCompute z2.large instance type
+  - CKV_AWS_126 # Detailed monitoring: Example bastion instance; adds cost for demo/example purposes
+  # Architecture decisions - future enhancement candidates
+  - CKV_AWS_315 # Launch templates: Module uses launch configurations; migration to templates is Phase 3+ work
+
+# Output configuration
+output:
+  - cli
+  - junitxml
+
+# Soft-fail on LOW severity (warnings, not blockers)
+soft-fail-on:
+  - LOW
