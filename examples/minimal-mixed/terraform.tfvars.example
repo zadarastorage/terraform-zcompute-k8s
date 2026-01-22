@@ -1,0 +1,42 @@
+# Mixed Flavor K3s Cluster Example - Variable Values
+# Copy this file to terraform.tfvars and fill in your values
+
+# -----------------------------------------------------------------------------
+# zCompute Provider Configuration
+# -----------------------------------------------------------------------------
+
+zcompute_endpoint   = "https://cloud.zadara.com"
+zcompute_access_key = "your-access-key"
+zcompute_secret_key = "your-secret-key"
+region              = "us-east-1"
+
+# -----------------------------------------------------------------------------
+# Network Configuration
+# -----------------------------------------------------------------------------
+
+vpc_id     = "vpc-xxxxxxxxx"
+subnet_ids = ["subnet-xxxxxxxxx", "subnet-yyyyyyyyy"]
+
+# -----------------------------------------------------------------------------
+# Cluster Configuration
+# -----------------------------------------------------------------------------
+
+# Generate with: openssl rand -hex 16
+cluster_token = "your-secure-cluster-token-min-16-chars"
+
+# -----------------------------------------------------------------------------
+# Node Configuration
+# -----------------------------------------------------------------------------
+
+iam_instance_profile = "k3s-node-profile"
+key_pair_name        = "my-ssh-key"
+
+# -----------------------------------------------------------------------------
+# Optional Configuration
+# -----------------------------------------------------------------------------
+
+name_prefix = "k3s-mixed"
+tags = {
+  Environment = "development"
+  Project     = "k3s-mixed-example"
+}
