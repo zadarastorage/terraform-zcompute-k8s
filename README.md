@@ -1,5 +1,7 @@
 # Zadara zCompute K8s Terraform Module
 
+[![CI](https://github.com/zadarastorage/terraform-zcompute-k8s/actions/workflows/pr.yml/badge.svg)](https://github.com/zadarastorage/terraform-zcompute-k8s/actions/workflows/pr.yml)
+
 Terraform module for provisioning production-ready K3s Kubernetes clusters on Zadara zCompute (AWS-compatible) infrastructure. Handles EC2 Auto Scaling Groups, internal load balancer, security groups, cloud-init provisioning, and optional Helm-managed add-ons.
 
 ## Features
