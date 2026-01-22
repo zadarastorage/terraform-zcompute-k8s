@@ -1,0 +1,201 @@
+name: PR Changelog
+
+# Updates CHANGELOG.md in PR branch so it can be reviewed before merge.
+# After merge, release.yml handles tagging and GitHub release creation.
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+    paths:
+      - '**/*.sh'
+      - '**/*.tf'
+      - '**/*.tpl'
+      - '**/*.yaml'
+      - '**/*.yml'
+      - '.github/workflows/**'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  changelog:
+    name: Update Changelog
+    runs-on: ubuntu-latest
+    # Only run on PRs from the same repo (not forks) to allow pushing
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Checkout PR Branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+          # Use default GITHUB_TOKEN - will work for same-repo PRs
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Dependencies
+        run: |
+          npm install -g \
+            semantic-release@24.2.7 \
+            @semantic-release/commit-analyzer@13.0.1 \
+            conventional-changelog-conventionalcommits@9.1.0 \
+            conventional-changelog-cli@5.0.0
+
+      - name: Determine Next Version
+        id: version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Create minimal config for dry-run version detection
+          cat > .releaserc.preview.json << 'EOF'
+          {
+            "branches": ["main", {"name": "*", "prerelease": "preview"}],
+            "plugins": [
+              ["@semantic-release/commit-analyzer", {"preset": "conventionalcommits"}]
+            ]
+          }
+          EOF
+
+          # Fetch main branch for comparison
+          git fetch origin main:main
+
+          # Run semantic-release dry-run against main
+          set +e
+          RESULT=$(npx semantic-release --dry-run --no-ci --branches main 2>&1)
+          EXIT_CODE=$?
+          set -e
+
+          echo "--- semantic-release output ---"
+          echo "$RESULT"
+          echo "--- end output ---"
+
+          # Extract version from output
+          VERSION=$(echo "$RESULT" | grep -oP "The next release version is \K[0-9]+\.[0-9]+\.[0-9]+" | head -1 || echo "")
+
+          # Cleanup
+          rm -f .releaserc.preview.json
+
+          if [ -z "$VERSION" ]; then
+            echo "No releasable commits found or couldn't determine version"
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "Next version will be: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "skip=false" >> $GITHUB_OUTPUT
+
+      - name: Update Changelog
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Check if this version is already in changelog
+          if grep -q "## \[${VERSION}\]" CHANGELOG.md 2>/dev/null; then
+            echo "Version $VERSION already in CHANGELOG.md, skipping"
+            echo "CHANGELOG_UPDATED=false" >> $GITHUB_ENV
+            exit 0
+          fi
+
+          # Generate changelog update
+          # -p: preset, -i: input file, -s: same file (in-place), -r: release count (0 = all)
+          npx conventional-changelog -p conventionalcommits -i CHANGELOG.md -s
+
+          # Check if changelog was actually updated
+          if git diff --quiet CHANGELOG.md 2>/dev/null; then
+            echo "No changelog changes detected"
+            echo "CHANGELOG_UPDATED=false" >> $GITHUB_ENV
+          else
+            echo "Changelog updated for version $VERSION"
+            echo "CHANGELOG_UPDATED=true" >> $GITHUB_ENV
+          fi
+
+      - name: Commit and Push Changelog
+        if: steps.version.outputs.skip != 'true' && env.CHANGELOG_UPDATED == 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add CHANGELOG.md
+          git commit -m "chore(changelog): update for v${VERSION} [skip ci]"
+          git push origin HEAD:${{ github.head_ref }}
+
+      - name: Comment on PR
+        if: steps.version.outputs.skip != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = '${{ steps.version.outputs.version }}';
+            const updated = '${{ env.CHANGELOG_UPDATED }}' === 'true';
+
+            const body = updated
+              ? `## Release Preview\n\nThis PR will create **v${version}** when merged.\n\nCHANGELOG.md has been updated. Please review the changes.`
+              : `## Release Preview\n\nThis PR will create **v${version}** when merged.\n\nCHANGELOG.md was already up to date.`;
+
+            // Find existing bot comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes('## Release Preview')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }
+
+      - name: No Release Comment
+        if: steps.version.outputs.skip == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `## Release Preview\n\nNo releasable commits found. This PR will not trigger a release when merged.\n\nTo trigger a release, ensure commits follow [Conventional Commits](https://www.conventionalcommits.org/) format (e.g., \`feat:\`, \`fix:\`).`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes('## Release Preview')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }

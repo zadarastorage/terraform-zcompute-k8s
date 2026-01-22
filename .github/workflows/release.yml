@@ -45,8 +45,6 @@ jobs:
         with:
           semantic_version: 24.2.7
           extra_plugins: |
-            @semantic-release/changelog@6.0.3
-            @semantic-release/git@10.0.1
             conventional-changelog-conventionalcommits@9.1.0
         env:
           GITHUB_TOKEN: ${{ github.token }}
