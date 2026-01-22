@@ -1,0 +1,33 @@
+# Pre-commit hooks for terraform-k8s-zcompute
+# https://pre-commit.com/
+# https://github.com/antonbabenko/pre-commit-terraform
+
+repos:
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.96.1
+    hooks:
+      # Format Terraform files
+      - id: terraform_fmt
+
+      # Validate Terraform syntax
+      - id: terraform_validate
+        args:
+          - --hook-config=--retry-once-with-cleanup=true
+
+      # Lint with tflint
+      - id: terraform_tflint
+        args:
+          - --args=--minimum-failure-severity=warning
+
+      # Update README documentation
+      - id: terraform_docs
+        args:
+          - --args=--config=.terraform-docs.yml
+
+  # Shell script linting
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.10.0
+    hooks:
+      - id: shellcheck
+        args: ["--severity=warning"]
+        files: ^files/.*\.sh$
