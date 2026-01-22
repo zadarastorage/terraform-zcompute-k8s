@@ -213,3 +213,56 @@ jobs:
             echo ""
             echo "Results uploaded to Security tab (if available)."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  terraform-test:
+    name: Terraform Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.6"
+
+      - name: Terraform Init
+        run: terraform init -backend=false
+
+      - name: Run Terraform Tests
+        id: test
+        run: |
+          terraform test -test-directory=tests/unit 2>&1 | tee test-output.txt
+          TEST_EXIT_CODE=${PIPESTATUS[0]}
+          echo "exit_code=$TEST_EXIT_CODE" >> "$GITHUB_OUTPUT"
+          exit $TEST_EXIT_CODE
+        continue-on-error: true
+
+      - name: Upload Test Output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-test-output
+          path: test-output.txt
+          retention-days: 7
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Terraform Tests"
+            echo ""
+            if [ "${{ steps.test.outputs.exit_code }}" = "0" ]; then
+              echo "All tests passed."
+            else
+              echo "Some tests failed. See test output artifact for details."
+            fi
+            echo ""
+            echo "**Coverage:** Variable validation tests (trusted_ami_owners, cluster_token)"
+            echo ""
+            echo "**Note:** Root module and examples validation covered by \`validate\` and \`validate-examples\` jobs."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if Tests Failed
+        if: steps.test.outputs.exit_code != '0'
+        run: exit 1

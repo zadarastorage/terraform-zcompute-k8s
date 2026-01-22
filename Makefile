@@ -1,7 +1,7 @@
 # Makefile for terraform-k8s-zcompute development workflow
 # Run 'make help' for available targets
 
-.PHONY: help init-hooks fmt lint validate docs security check-all clean
+.PHONY: help init-hooks fmt lint validate test test-verbose docs security check-all clean
 
 # Default target
 help:
@@ -11,6 +11,8 @@ help:
 	@echo "  lint        - Run tflint"
 	@echo "  validate    - Validate Terraform configuration"
 	@echo "  docs        - Update README with terraform-docs"
+	@echo "  test        - Run Terraform tests"
+	@echo "  test-verbose- Run Terraform tests with verbose output"
 	@echo "  security    - Run Checkov security scan"
 	@echo "  check-all   - Run all checks (CI parity)"
 	@echo "  clean       - Remove Terraform cache files"
@@ -34,6 +36,14 @@ validate:
 	terraform init -backend=false -upgrade
 	terraform validate
 
+# Run Terraform tests
+test:
+	terraform test -test-directory=tests/unit
+
+# Run Terraform tests with verbose output
+test-verbose:
+	terraform test -test-directory=tests/unit -verbose
+
 # Update README documentation
 docs:
 	terraform-docs .
@@ -43,7 +53,7 @@ security:
 	checkov -d . --config-file .checkov.yaml
 
 # Run all checks (CI parity)
-check-all: fmt validate lint docs security
+check-all: fmt validate test lint docs security
 	@echo ""
 	@echo "All checks passed!"
 
