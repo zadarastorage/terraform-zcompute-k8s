@@ -1,0 +1,323 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.tf'
+      - '**.tfvars'
+      - '.github/workflows/ci.yml'
+      - '.tflint.hcl'
+  push:
+    branches: [main]
+    paths:
+      - '**.tf'
+      - '**.tfvars'
+  workflow_dispatch:
+  repository_dispatch:
+    types: [release-pr-ci]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.client_payload.pr_number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  fmt:
+    name: Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.client_payload.head_sha || '' }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.7"
+
+      - name: Check formatting
+        id: fmt
+        run: |
+          set +e
+          FMT_OUTPUT=$(terraform fmt -check -diff -recursive 2>&1)
+          FMT_EXIT=$?
+          set -e
+
+          if [ $FMT_EXIT -ne 0 ]; then
+            echo "$FMT_OUTPUT"
+            echo "::error file=.github/workflows/ci.yml,title=Formatting Issues::Run 'terraform fmt -recursive' to fix formatting"
+
+            # Parse output and create file-specific annotations
+            while IFS= read -r line; do
+              if [[ $line =~ ^([^[:space:]]+)$ ]]; then
+                echo "::error file=$line::File needs formatting"
+              fi
+            done <<< "$FMT_OUTPUT"
+
+            exit 1
+          fi
+
+          echo "All files formatted correctly"
+
+  validate:
+    name: Validate (${{ matrix.target.name }}) (TF ${{ matrix.terraform_version }})
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.terraform_version == 'latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        terraform_version:
+          - "1.5.7"
+          - "latest"
+        target:
+          - path: "."
+            name: "root"
+          - path: "examples/k8s-simple"
+            name: "k8s-simple"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.client_payload.head_sha || '' }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ matrix.terraform_version }}
+
+      - name: Cache Terraform providers
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ matrix.target.path }}/.terraform
+            ${{ matrix.target.path }}/.terraform.lock.hcl
+          key: ${{ runner.os }}-terraform-${{ matrix.terraform_version }}-${{ hashFiles(format('{0}/.terraform.lock.hcl', matrix.target.path)) }}
+          restore-keys: |
+            ${{ runner.os }}-terraform-${{ matrix.terraform_version }}-
+            ${{ runner.os }}-terraform-
+
+      - name: Terraform Init
+        working-directory: ${{ matrix.target.path }}
+        run: terraform init -backend=false -input=false
+
+      - name: Terraform Validate
+        id: validate
+        working-directory: ${{ matrix.target.path }}
+        run: |
+          set +e
+          VALIDATE_OUTPUT=$(terraform validate -json 2>&1)
+          VALIDATE_EXIT=$?
+          set -e
+
+          if [ $VALIDATE_EXIT -ne 0 ]; then
+            echo "$VALIDATE_OUTPUT"
+            echo "$VALIDATE_OUTPUT" | jq -r '.diagnostics[]? | "::error file=\(.range.filename // "unknown"),line=\(.range.start.line // 0),title=Validation Error::\(.summary): \(.detail)"' || true
+            exit 1
+          fi
+
+          echo "Configuration is valid"
+
+  lint:
+    name: Lint (${{ matrix.target.name }}) (TF ${{ matrix.terraform_version }})
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.terraform_version == 'latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        terraform_version:
+          - "1.5.7"
+          - "latest"
+        target:
+          - path: "."
+            name: "root"
+          - path: "examples/k8s-simple"
+            name: "k8s-simple"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.client_payload.head_sha || '' }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ matrix.terraform_version }}
+
+      - name: Cache tflint plugins
+        uses: actions/cache@v4
+        with:
+          path: ~/.tflint.d/plugins
+          key: ${{ runner.os }}-tflint-${{ hashFiles('.tflint.hcl') }}
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v6
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Init TFLint
+        run: tflint --init
+
+      - name: Run TFLint
+        id: tflint
+        working-directory: ${{ matrix.target.path }}
+        run: |
+          set +e
+          TFLINT_OUTPUT=$(tflint --format=compact --minimum-failure-severity=error 2>&1)
+          TFLINT_EXIT=$?
+          set -e
+
+          if [ $TFLINT_EXIT -ne 0 ]; then
+            echo "$TFLINT_OUTPUT"
+
+            # Parse compact format: file:line:col: severity: message (rule)
+            while IFS= read -r line; do
+              if [[ $line =~ ^([^:]+):([0-9]+):([0-9]+):[[:space:]]*(error|warning):[[:space:]]*(.+)$ ]]; then
+                file="${BASH_REMATCH[1]}"
+                lineno="${BASH_REMATCH[2]}"
+                col="${BASH_REMATCH[3]}"
+                severity="${BASH_REMATCH[4]}"
+                message="${BASH_REMATCH[5]}"
+
+                if [ "$severity" = "error" ]; then
+                  echo "::error file=$file,line=$lineno,col=$col::$message"
+                fi
+              fi
+            done <<< "$TFLINT_OUTPUT"
+
+            exit 1
+          fi
+
+          echo "No linting issues found"
+
+      - name: Upload TFLint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tflint-${{ matrix.target.name }}-tf${{ matrix.terraform_version }}
+          path: ${{ matrix.target.path }}/.tflint.d
+          retention-days: 7
+          if-no-files-found: ignore
+
+  summary:
+    name: Quality Gates Summary
+    runs-on: ubuntu-latest
+    needs: [fmt, validate, lint]
+    if: always()
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.client_payload.head_sha || '' }}
+
+      - name: Aggregate results
+        id: aggregate
+        run: |
+          # Create summary
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ## Terraform Quality Gates Results
+
+          | Job | Result |
+          |-----|--------|
+          | Format Check | ${{ needs.fmt.result }} |
+          | Validate | ${{ needs.validate.result }} |
+          | Lint | ${{ needs.lint.result }} |
+
+          ### Details
+          EOF
+
+          # Determine overall status
+          FAILED=false
+
+          if [[ "${{ needs.fmt.result }}" != "success" ]]; then
+            echo "- **Format Check**: Failed" >> $GITHUB_STEP_SUMMARY
+            FAILED=true
+          else
+            echo "- **Format Check**: Passed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [[ "${{ needs.validate.result }}" != "success" ]]; then
+            echo "- **Validate**: Failed (check matrix jobs for details)" >> $GITHUB_STEP_SUMMARY
+            FAILED=true
+          else
+            echo "- **Validate**: All targets passed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [[ "${{ needs.lint.result }}" != "success" ]]; then
+            echo "- **Lint**: Failed (check matrix jobs for details)" >> $GITHUB_STEP_SUMMARY
+            FAILED=true
+          else
+            echo "- **Lint**: All targets passed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "$FAILED" = "true" ]; then
+            echo "status=failed" >> $GITHUB_OUTPUT
+          else
+            echo "status=success" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- ci-quality-gates -->';
+            const status = '${{ steps.aggregate.outputs.status }}';
+            const statusEmoji = status === 'success' ? '✅' : '❌';
+
+            const body = `${marker}
+            ## ${statusEmoji} Terraform Quality Gates
+
+            | Check | Status |
+            |-------|--------|
+            | Format | ${{ needs.fmt.result == 'success' && '✅ Pass' || '❌ Fail' }} |
+            | Validate | ${{ needs.validate.result == 'success' && '✅ Pass' || '❌ Fail' }} |
+            | Lint | ${{ needs.lint.result == 'success' && '✅ Pass' || '❌ Fail' }} |
+
+            ${status === 'failed' ? '**Action required:** Please fix the issues above before merging.' : '**All checks passed!** This PR is ready for review.'}
+
+            <details>
+            <summary>Matrix Results</summary>
+
+            View individual job results in the [Actions tab](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}).
+
+            **Note:** Jobs marked with "(latest)" are informational and allowed to fail.
+            </details>
+            `;
+
+            // Find existing comment
+            const {data: comments} = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            const botComment = comments.find(c => c.body.includes(marker));
+
+            if (botComment) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              // Create new comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }
+
+      - name: Fail if checks failed
+        if: steps.aggregate.outputs.status == 'failed'
+        run: |
+          echo "::error::One or more quality gates failed"
+          exit 1
