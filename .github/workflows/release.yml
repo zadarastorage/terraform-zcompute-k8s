@@ -14,7 +14,15 @@ jobs:
     if: github.repository_owner == 'zadarastorage'
     steps:
       - uses: googleapis/release-please-action@v4
+        id: release
         with:
-          token: ${{ secrets.RELEASE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      # Trigger CI on Release PR (GITHUB_TOKEN PRs don't trigger workflows)
+      - name: Trigger CI for Release PR
+        if: steps.release.outputs.pr
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          event-type: release-pr-ci
+          client-payload: '{"pr_number": "${{ steps.release.outputs.pr }}", "head_sha": "${{ steps.release.outputs.sha }}"}'
