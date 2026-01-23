@@ -5,3 +5,10 @@ repos:
       - id: commitlint
         stages: [commit-msg]
         additional_dependencies: ['@commitlint/config-conventional']
+
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.89.0
+    hooks:
+      - id: terraform_docs
+        args:
+          - --args=--config=.terraform-docs.yml

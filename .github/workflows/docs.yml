@@ -1,0 +1,40 @@
+name: Generate terraform docs
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '*.tf'
+      - '.terraform-docs.yml'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate terraform docs
+        uses: terraform-docs/gh-actions@v1
+        with:
+          working-dir: .
+          output-file: README.md
+          output-method: inject
+          git-push: "false"
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v8
+        with:
+          commit-message: "docs: update terraform-docs generated content"
+          title: "[Automated] Update Terraform Documentation"
+          body: |
+            This PR updates the auto-generated terraform-docs sections.
+
+            Changes detected in Terraform files triggered this update.
+          branch: docs/terraform-docs-update
+          delete-branch: true
