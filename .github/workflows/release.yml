@@ -1,40 +1,20 @@
 name: Release
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - main
-    paths:
-      - '**/*.sh'
-      - '**/*.tf'
-      - '**/*.tpl'
-      - '**/*.yaml'
-      - '.github/workflows/release.yml'
+    branches: [main]
 
 permissions:
   contents: write
-  repository-projects: read
+  pull-requests: write
 
 jobs:
-  release:
-    name: Release
+  release-please:
     runs-on: ubuntu-latest
     if: github.repository_owner == 'zadarastorage'
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: googleapis/release-please-action@v4
         with:
-          #persist-credentials: false
-          fetch-depth: 0
-
-      - name: Release
-        uses: cycjimmy/semantic-release-action@v4
-        with:
-          semantic_version: 24.2.7
-          extra_plugins: |
-            @semantic-release/changelog@6.0.3
-            @semantic-release/git@10.0.1
-            conventional-changelog-conventionalcommits@9.1.0
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+          token: ${{ secrets.RELEASE_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
