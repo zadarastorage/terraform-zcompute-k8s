@@ -1,0 +1,12 @@
+# Trivy suppressions for terraform-zcompute-k8s module
+# Each suppression includes rationale for audit purposes
+
+# Security Group - Unrestricted Egress
+# K8s nodes require outbound internet for container image pulls
+# Rationale: K3s cluster cannot function without ability to pull container images
+AVD-AWS-0104
+
+# Load Balancer Access Logging
+# zCompute may not support this AWS feature
+# Rationale: Platform limitation on zCompute infrastructure
+AVD-AWS-0053

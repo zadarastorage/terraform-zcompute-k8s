@@ -1,0 +1,34 @@
+# Checkov configuration for terraform-zcompute-k8s module
+# Suppressions with documented rationale for security audit
+
+skip-check:
+  # K8s Cluster Security Groups
+  # K8s nodes require full intra-cluster communication (ingress_k8s, egress_k8s rules in sg.tf)
+  # Rationale: Standard K8s networking requirement - nodes must communicate on all ports for
+  # pod-to-pod networking, kubelet communication, and cluster services
+  - CKV_AWS_382  # Security group allows all protocols
+
+  # K8s Node Egress
+  # K8s nodes require outbound internet access for container image pulls
+  # Rationale: K3s pulls images from container registries (gcr.io, docker.io, quay.io)
+  # Without egress, pods cannot pull images and cluster cannot function
+  - CKV_AWS_260  # Security group allows 0.0.0.0/0 egress
+
+  # Launch Configuration - EBS Encryption
+  # zCompute may not support EBS encryption feature
+  # Rationale: Platform limitation - encryption not available on zCompute infrastructure
+  # See root_block_device in launch_configuration.tf
+  - CKV_AWS_8    # EBS volume not encrypted
+
+  # Network Load Balancer Settings
+  # zCompute may not support NLB deletion protection or access logging features
+  # Rationale: Platform limitation - these AWS features may not be available on zCompute
+  # See aws_lb.kube_api in load_balancer.tf
+  - CKV_AWS_150  # NLB deletion protection not enabled
+  - CKV_AWS_91   # Load balancer access logging not enabled
+
+  # Module Source References in Examples
+  # Examples use GitHub ref or local source for demonstration purposes
+  # Rationale: Examples show how users would reference the module, not production pinning
+  - CKV_TF_1    # Module source not using commit hash
+  - CKV_TF_2    # Module source not using version tag
