@@ -1,0 +1,461 @@
+name: Integration Tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.tf'
+      - 'tests/**'
+      - '.github/workflows/integration-test.yml'
+  push:
+    branches: [main]
+    paths:
+      - '**.tf'
+      - 'tests/**'
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly Monday 6am UTC
+  workflow_dispatch:
+    inputs:
+      skip_destroy:
+        description: 'Skip destroy step (for debugging)'
+        required: false
+        type: boolean
+        default: false
+
+# CRITICAL: Global concurrency group - only ONE K8s test at a time
+# This prevents autoscaler collisions from parallel K8s tests
+concurrency:
+  group: k8s-integration-test-global
+  cancel-in-progress: false  # Queue, don't cancel (prevents orphaned resources)
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  check-credentials:
+    name: Check Credentials
+    runs-on: ubuntu-latest
+    outputs:
+      has_credentials: ${{ steps.check.outputs.has_credentials }}
+    steps:
+      - name: Check for zCompute credentials
+        id: check
+        env:
+          ZCOMPUTE_ENDPOINT: ${{ secrets.ZCOMPUTE_ENDPOINT }}
+          ZCOMPUTE_ACCESS_KEY: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
+          ZCOMPUTE_SECRET_KEY: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
+        run: |
+          if [ -n "$ZCOMPUTE_ENDPOINT" ] && [ -n "$ZCOMPUTE_ACCESS_KEY" ] && [ -n "$ZCOMPUTE_SECRET_KEY" ]; then
+            echo "has_credentials=true" >> $GITHUB_OUTPUT
+            echo "All zCompute credentials are configured"
+          else
+            echo "has_credentials=false" >> $GITHUB_OUTPUT
+            echo "::warning::Integration tests skipped - zCompute credentials not configured. See CONTRIBUTING.md for setup instructions."
+
+            # Log which credentials are missing
+            [ -z "$ZCOMPUTE_ENDPOINT" ] && echo "::warning::Missing secret: ZCOMPUTE_ENDPOINT"
+            [ -z "$ZCOMPUTE_ACCESS_KEY" ] && echo "::warning::Missing secret: ZCOMPUTE_ACCESS_KEY"
+            [ -z "$ZCOMPUTE_SECRET_KEY" ] && echo "::warning::Missing secret: ZCOMPUTE_SECRET_KEY"
+          fi
+
+  test:
+    name: Integration Test
+    runs-on: ubuntu-latest
+    needs: check-credentials
+    if: needs.check-credentials.outputs.has_credentials == 'true'
+    timeout-minutes: 60
+
+    env:
+      TF_VAR_zcompute_api_endpoint: ${{ secrets.ZCOMPUTE_ENDPOINT }}
+      TF_VAR_zcompute_access_key: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
+      TF_VAR_zcompute_secret_key: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
+      TF_VAR_run_id: ${{ github.run_id }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.7"
+          terraform_wrapper: false
+
+      - name: Generate cluster token
+        id: token
+        run: |
+          TOKEN=$(openssl rand -hex 32)
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> $GITHUB_OUTPUT
+
+      # ============================================================
+      # Phase 1: VPC
+      # ============================================================
+      - name: VPC - Init
+        working-directory: tests/fixtures/vpc
+        run: terraform init -input=false
+
+      - name: VPC - Apply
+        id: vpc
+        working-directory: tests/fixtures/vpc
+        run: |
+          echo "Deploying VPC: test-k8s-${{ github.run_id }}"
+          terraform apply -auto-approve -input=false
+
+          # Capture outputs for downstream fixtures
+          echo "vpc_id=$(terraform output -raw vpc_id)" >> $GITHUB_OUTPUT
+          echo "private_subnets=$(terraform output -json private_subnets)" >> $GITHUB_OUTPUT
+
+          echo "::notice::VPC deployed successfully"
+
+      # ============================================================
+      # Phase 2: IAM
+      # ============================================================
+      - name: IAM - Init
+        working-directory: tests/fixtures/iam
+        run: terraform init -input=false
+
+      - name: IAM - Apply
+        id: iam
+        working-directory: tests/fixtures/iam
+        run: |
+          echo "Deploying IAM: test-k8s-${{ github.run_id }}"
+          terraform apply -auto-approve -input=false
+
+          # Capture output for K8s fixture
+          echo "instance_profile_name=$(terraform output -raw instance_profile_name)" >> $GITHUB_OUTPUT
+
+          echo "::notice::IAM instance profile deployed successfully"
+
+      - name: Wait for IAM propagation
+        run: |
+          echo "Waiting 30 seconds for IAM eventual consistency..."
+          sleep 30
+
+      # ============================================================
+      # Phase 3: K8s
+      # ============================================================
+      - name: K8s - Init
+        working-directory: tests/fixtures/k8s
+        run: terraform init -input=false
+
+      - name: K8s - Apply
+        id: k8s
+        working-directory: tests/fixtures/k8s
+        env:
+          TF_VAR_vpc_id: ${{ steps.vpc.outputs.vpc_id }}
+          TF_VAR_private_subnets: ${{ steps.vpc.outputs.private_subnets }}
+          TF_VAR_iam_instance_profile: ${{ steps.iam.outputs.instance_profile_name }}
+          TF_VAR_cluster_token: ${{ steps.token.outputs.token }}
+        run: |
+          echo "Deploying K8s cluster: test-k8s-${{ github.run_id }}"
+
+          # Apply with one retry on failure
+          if ! terraform apply -auto-approve -input=false; then
+            echo "::warning::First apply failed, retrying in 30 seconds..."
+            sleep 30
+            terraform apply -auto-approve -input=false
+          fi
+
+          # Capture outputs
+          echo "cluster_name=$(terraform output -raw cluster_name)" >> $GITHUB_OUTPUT
+          echo "load_balancer_dns=$(terraform output -raw load_balancer_dns)" >> $GITHUB_OUTPUT
+
+          echo "::notice::K8s cluster deployed successfully"
+
+      - name: Generate kubeconfig
+        id: kubeconfig
+        if: steps.k8s.outcome == 'success'
+        working-directory: tests/fixtures/k8s
+        run: |
+          LB_DNS=$(terraform output -raw load_balancer_dns)
+          TOKEN="${{ steps.token.outputs.token }}"
+
+          cat > kubeconfig.yaml << EOF
+          apiVersion: v1
+          kind: Config
+          clusters:
+          - cluster:
+              server: https://${LB_DNS}:6443
+              insecure-skip-tls-verify: true
+            name: test-cluster
+          contexts:
+          - context:
+              cluster: test-cluster
+              user: test-user
+            name: test-context
+          current-context: test-context
+          users:
+          - name: test-user
+            user:
+              token: ${TOKEN}
+          EOF
+
+          echo "KUBECONFIG=$(pwd)/kubeconfig.yaml" >> $GITHUB_OUTPUT
+          echo "::notice::kubeconfig generated at $(pwd)/kubeconfig.yaml"
+
+      - name: Validate cluster health
+        if: steps.kubeconfig.outcome == 'success'
+        timeout-minutes: 15
+        env:
+          KUBECONFIG: ${{ steps.kubeconfig.outputs.KUBECONFIG }}
+        run: |
+          echo "Waiting for cluster to be healthy (timeout: 15 minutes)"
+
+          # Poll for at least 1 node Ready (15s intervals, up to 60 retries = 15 min)
+          RETRY=0
+          MAX_RETRY=60
+          READY_NODES=0
+
+          while [ $RETRY -lt $MAX_RETRY ]; do
+            NODES=$(kubectl get nodes --no-headers 2>/dev/null || echo "")
+            READY_NODES=$(echo "$NODES" | grep -c " Ready" || echo "0")
+            TOTAL_NODES=$(echo "$NODES" | grep -c "." || echo "0")
+
+            echo "Attempt $((RETRY + 1))/$MAX_RETRY: Nodes $READY_NODES/$TOTAL_NODES Ready"
+
+            if [ "$READY_NODES" -ge 1 ]; then
+              echo "At least one node is Ready"
+              break
+            fi
+
+            RETRY=$((RETRY + 1))
+            sleep 15
+          done
+
+          if [ "$READY_NODES" -lt 1 ]; then
+            echo "::error::No nodes became Ready within 15 minutes"
+            echo "=== Node Status ==="
+            kubectl get nodes -o wide || true
+            echo "=== Node Descriptions ==="
+            kubectl describe nodes || true
+            echo "=== System Events ==="
+            kubectl get events -n kube-system --sort-by='.lastTimestamp' || true
+            exit 1
+          fi
+
+          echo "Checking for coredns pods..."
+
+          # Wait for coredns to be Running (5 minute timeout)
+          if ! kubectl wait --for=condition=Ready pod -l k8s-app=kube-dns -n kube-system --timeout=300s; then
+            echo "::error::coredns pods not Ready within 5 minutes"
+            echo "=== kube-system Pods ==="
+            kubectl get pods -n kube-system -o wide || true
+            echo "=== coredns Pod Descriptions ==="
+            kubectl describe pods -n kube-system -l k8s-app=kube-dns || true
+            exit 1
+          fi
+
+          echo "Cluster is healthy!"
+
+          # Write health summary
+          READY_NODE_COUNT=$(kubectl get nodes --no-headers | grep -c " Ready" || echo "0")
+          COREDNS_COUNT=$(kubectl get pods -n kube-system -l k8s-app=kube-dns --no-headers | grep -c "Running" || echo "0")
+
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ### Cluster Health Validation
+
+          | Check | Status |
+          |-------|--------|
+          | Nodes Ready | $READY_NODE_COUNT |
+          | coredns Running | $COREDNS_COUNT |
+
+          **Cluster:** test-k8s-${{ github.run_id }}
+          **Load Balancer:** ${{ steps.k8s.outputs.load_balancer_dns }}
+          EOF
+
+      # ============================================================
+      # Cleanup: Reverse order (K8s -> IAM -> VPC)
+      # ============================================================
+      - name: K8s - Destroy
+        if: always() && steps.k8s.outcome == 'success' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_destroy != 'true')
+        working-directory: tests/fixtures/k8s
+        env:
+          TF_VAR_vpc_id: ${{ steps.vpc.outputs.vpc_id }}
+          TF_VAR_private_subnets: ${{ steps.vpc.outputs.private_subnets }}
+          TF_VAR_iam_instance_profile: ${{ steps.iam.outputs.instance_profile_name }}
+          TF_VAR_cluster_token: ${{ steps.token.outputs.token }}
+        run: |
+          echo "Destroying K8s cluster: test-k8s-${{ github.run_id }}"
+          terraform destroy -auto-approve -input=false || {
+            echo "::warning::K8s destroy failed, continuing with IAM/VPC cleanup"
+          }
+
+      - name: IAM - Destroy
+        if: always() && steps.iam.outcome == 'success' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_destroy != 'true')
+        working-directory: tests/fixtures/iam
+        run: |
+          echo "Destroying IAM resources: test-k8s-${{ github.run_id }}"
+          terraform destroy -auto-approve -input=false || {
+            echo "::warning::IAM destroy failed, continuing with VPC cleanup"
+          }
+
+      - name: VPC - Destroy
+        if: always() && steps.vpc.outcome == 'success' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_destroy != 'true')
+        working-directory: tests/fixtures/vpc
+        run: |
+          echo "Destroying VPC: test-k8s-${{ github.run_id }}"
+          if ! terraform destroy -auto-approve -input=false; then
+            echo "::error::VPC destroy failed - manual cleanup may be required"
+            cat >> $GITHUB_STEP_SUMMARY << EOF
+          ### Manual Cleanup Required
+
+          **VPC destroy failed.** Please manually clean up:
+          - VPC Name: \`test-k8s-${{ github.run_id }}\`
+          - Run ID: \`${{ github.run_id }}\`
+
+          Check the zCompute console and delete resources with this name prefix.
+          EOF
+          fi
+
+  summary:
+    name: Integration Test Summary
+    runs-on: ubuntu-latest
+    needs: [check-credentials, test]
+    if: always()
+    steps:
+      - name: Aggregate results
+        id: aggregate
+        run: |
+          # Determine credential status
+          HAS_CREDS="${{ needs.check-credentials.outputs.has_credentials }}"
+
+          # Create summary
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ## Integration Test Results
+
+          EOF
+
+          if [ "$HAS_CREDS" != "true" ]; then
+            cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ### Credentials Not Configured
+
+          Integration tests were skipped because zCompute credentials are not configured.
+
+          **To enable integration tests:**
+          1. Add repository secrets: `ZCOMPUTE_ENDPOINT`, `ZCOMPUTE_ACCESS_KEY`, `ZCOMPUTE_SECRET_KEY`
+          2. See [CONTRIBUTING.md](../CONTRIBUTING.md) for detailed setup instructions
+
+          **Note:** This is expected for pull requests from forks.
+          EOF
+            echo "status=skipped" >> $GITHUB_OUTPUT
+          else
+            # Check test results
+            TEST_RESULT="${{ needs.test.result }}"
+
+            if [ "$TEST_RESULT" = "success" ]; then
+              cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ### All Tests Passed
+
+          K8s cluster successfully deployed, validated, and cleaned up.
+
+          | Component | Status |
+          |-----------|--------|
+          | VPC | Created and destroyed |
+          | IAM Instance Profile | Created and destroyed |
+          | K8s Cluster | Created, validated, and destroyed |
+          | Cluster Health | Nodes Ready, coredns Running |
+          EOF
+              echo "status=success" >> $GITHUB_OUTPUT
+            else
+              cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ### Tests Failed
+
+          Integration test failed. Check individual job logs for details.
+
+          **Possible issues:**
+          - VPC creation failed
+          - IAM instance profile creation failed
+          - K8s cluster creation failed
+          - Cluster health validation failed
+          - Resource cleanup failed
+          EOF
+              echo "status=failed" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Post PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- k8s-integration-test-results -->';
+            const hasCreds = '${{ needs.check-credentials.outputs.has_credentials }}' === 'true';
+            const status = '${{ steps.aggregate.outputs.status }}';
+
+            let body = `${marker}\n`;
+
+            if (!hasCreds) {
+              body += `## Integration Tests Skipped
+
+            zCompute credentials are not configured for this repository.
+
+            **This is expected for pull requests from forks.** Maintainers will run integration tests before merging.
+
+            <details>
+            <summary>How to enable integration tests</summary>
+
+            Repository maintainers can add these secrets in Settings > Secrets and variables > Actions:
+            - \`ZCOMPUTE_ENDPOINT\` - zCompute region API endpoint
+            - \`ZCOMPUTE_ACCESS_KEY\` - AWS-style access key
+            - \`ZCOMPUTE_SECRET_KEY\` - AWS-style secret key
+
+            See [CONTRIBUTING.md](../CONTRIBUTING.md) for details.
+            </details>
+            `;
+            } else if (status === 'success') {
+              body += `## Integration Tests Passed
+
+            K8s module successfully deployed and validated against zCompute infrastructure.
+
+            | Component | Status |
+            |-----------|--------|
+            | VPC | Created and destroyed |
+            | IAM Instance Profile | Created and destroyed |
+            | K8s Cluster | Created, validated, and destroyed |
+            | Cluster Health | Nodes Ready, coredns Running |
+
+            [View workflow run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            `;
+            } else {
+              body += `## Integration Tests Failed
+
+            K8s module integration tests failed. Please check the logs.
+
+            [View workflow run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            `;
+            }
+
+            // Find existing comment
+            const {data: comments} = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            const botComment = comments.find(c => c.body.includes(marker));
+
+            if (botComment) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              // Create new comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }
+
+      - name: Fail if tests failed
+        if: steps.aggregate.outputs.status == 'failed'
+        run: |
+          echo "::error::Integration tests failed"
+          exit 1
