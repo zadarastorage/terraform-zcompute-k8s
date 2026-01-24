@@ -1,0 +1,878 @@
+name: Cleanup Test Resources
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly Sunday midnight UTC (offset from test schedule Monday 6am)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run - log what would be deleted'
+        required: false
+        type: boolean
+        default: true
+      max_age_days:
+        description: 'Delete resources older than N days'
+        required: false
+        type: number
+        default: 7
+
+permissions:
+  contents: read
+
+jobs:
+  check-credentials:
+    name: Check Credentials
+    runs-on: ubuntu-latest
+    outputs:
+      has_credentials: ${{ steps.check.outputs.has_credentials }}
+    steps:
+      - name: Check for zCompute credentials
+        id: check
+        env:
+          ZCOMPUTE_ENDPOINT: ${{ secrets.ZCOMPUTE_ENDPOINT }}
+          ZCOMPUTE_ACCESS_KEY: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
+          ZCOMPUTE_SECRET_KEY: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
+        run: |
+          if [ -n "$ZCOMPUTE_ENDPOINT" ] && [ -n "$ZCOMPUTE_ACCESS_KEY" ] && [ -n "$ZCOMPUTE_SECRET_KEY" ]; then
+            echo "has_credentials=true" >> $GITHUB_OUTPUT
+            echo "All zCompute credentials are configured"
+          else
+            echo "has_credentials=false" >> $GITHUB_OUTPUT
+            echo "::warning::Cleanup skipped - zCompute credentials not configured."
+
+            # Log which credentials are missing
+            [ -z "$ZCOMPUTE_ENDPOINT" ] && echo "::warning::Missing secret: ZCOMPUTE_ENDPOINT"
+            [ -z "$ZCOMPUTE_ACCESS_KEY" ] && echo "::warning::Missing secret: ZCOMPUTE_ACCESS_KEY"
+            [ -z "$ZCOMPUTE_SECRET_KEY" ] && echo "::warning::Missing secret: ZCOMPUTE_SECRET_KEY"
+          fi
+
+  cleanup:
+    name: Cleanup Orphaned K8s Test Resources
+    runs-on: ubuntu-latest
+    needs: check-credentials
+    if: needs.check-credentials.outputs.has_credentials == 'true'
+    timeout-minutes: 30
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
+      AWS_REGION: us-east-1
+      AWS_EC2_METADATA_DISABLED: true
+      ZCOMPUTE_ENDPOINT: ${{ secrets.ZCOMPUTE_ENDPOINT }}
+      DRY_RUN: ${{ github.event.inputs.dry_run || 'true' }}
+      MAX_AGE_DAYS: ${{ github.event.inputs.max_age_days || '7' }}
+    steps:
+      - name: Initialize counters and summary
+        id: init
+        run: |
+          # Initialize counters
+          echo "ASGS_SCANNED=0" >> $GITHUB_ENV
+          echo "ASGS_DELETED=0" >> $GITHUB_ENV
+          echo "LCS_SCANNED=0" >> $GITHUB_ENV
+          echo "LCS_DELETED=0" >> $GITHUB_ENV
+          echo "LBS_SCANNED=0" >> $GITHUB_ENV
+          echo "LBS_DELETED=0" >> $GITHUB_ENV
+          echo "SGS_SCANNED=0" >> $GITHUB_ENV
+          echo "SGS_DELETED=0" >> $GITHUB_ENV
+          echo "PROFILES_SCANNED=0" >> $GITHUB_ENV
+          echo "PROFILES_DELETED=0" >> $GITHUB_ENV
+          echo "ROLES_SCANNED=0" >> $GITHUB_ENV
+          echo "ROLES_DELETED=0" >> $GITHUB_ENV
+          echo "POLICIES_SCANNED=0" >> $GITHUB_ENV
+          echo "POLICIES_DELETED=0" >> $GITHUB_ENV
+          echo "VPCS_SCANNED=0" >> $GITHUB_ENV
+          echo "VPCS_DELETED=0" >> $GITHUB_ENV
+          echo "ERRORS=0" >> $GITHUB_ENV
+
+          echo "## Cleanup K8s Test Resources" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Configuration:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Dry run: $DRY_RUN" >> $GITHUB_STEP_SUMMARY
+          echo "- Max age: $MAX_AGE_DAYS days" >> $GITHUB_STEP_SUMMARY
+          echo "- Resource prefix: test-k8s-*" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Cleanup order:** ASG -> Launch Config -> Load Balancer -> Security Group -> IAM -> VPC" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      # Step 1: Cleanup Auto Scaling Groups (must be deleted before Launch Configs)
+      - name: Cleanup old Auto Scaling Groups
+        id: cleanup-asgs
+        env:
+          AWS_ENDPOINT_URL: ${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/autoscaling
+        run: |
+          echo "### Auto Scaling Groups" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "Scanning for orphaned ASGs (prefix: test-k8s-, older than $MAX_AGE_DAYS days)"
+
+          CURRENT_TIME=$(date +%s)
+
+          # List all ASGs
+          ASGS_JSON=$(aws autoscaling describe-auto-scaling-groups --output json --no-verify-ssl 2>/dev/null || echo '{"AutoScalingGroups":[]}')
+
+          # Filter for names starting with "test-k8s-"
+          ASGS=$(echo "$ASGS_JSON" | jq -r '.AutoScalingGroups[] | select(.AutoScalingGroupName | startswith("test-k8s-")) | .AutoScalingGroupName')
+
+          if [ -z "$ASGS" ]; then
+            echo "No test-k8s-* ASGs found"
+            echo "No test-k8s-* ASGs found." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          SCANNED=0
+          DELETED=0
+
+          for ASG in $ASGS; do
+            SCANNED=$((SCANNED + 1))
+
+            # Get ASG details including creation date
+            ASG_INFO=$(echo "$ASGS_JSON" | jq -r --arg name "$ASG" '.AutoScalingGroups[] | select(.AutoScalingGroupName == $name)')
+            CREATE_DATE=$(echo "$ASG_INFO" | jq -r '.CreatedTime // ""')
+
+            if [ -z "$CREATE_DATE" ] || [ "$CREATE_DATE" = "null" ]; then
+              echo "::warning::Could not get creation date for ASG: $ASG - skipping age check, treating as old"
+              AGE_DAYS=999
+            else
+              CREATE_EPOCH=$(date -d "$CREATE_DATE" +%s 2>/dev/null || echo "0")
+              if [ "$CREATE_EPOCH" = "0" ]; then
+                echo "::warning::Could not parse creation date for ASG: $ASG"
+                continue
+              fi
+              AGE_DAYS=$(( (CURRENT_TIME - CREATE_EPOCH) / 86400 ))
+            fi
+
+            echo "Found: $ASG (age: $AGE_DAYS days)"
+
+            if [ $AGE_DAYS -gt $MAX_AGE_DAYS ]; then
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "Would delete: $ASG (age: $AGE_DAYS days)"
+                echo "- Would delete: \`$ASG\` (age: $AGE_DAYS days)" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "Deleting ASG: $ASG"
+                if aws autoscaling delete-auto-scaling-group \
+                  --auto-scaling-group-name "$ASG" \
+                  --force-delete \
+                  --no-verify-ssl 2>/dev/null; then
+                  echo "Deleted: $ASG"
+                  echo "- Deleted: \`$ASG\` (age: $AGE_DAYS days)" >> $GITHUB_STEP_SUMMARY
+                  DELETED=$((DELETED + 1))
+                else
+                  echo "::warning::Failed to delete ASG: $ASG"
+                  echo "ERRORS=$((ERRORS + 1))" >> $GITHUB_ENV
+                fi
+              fi
+            else
+              echo "Keeping: $ASG (age: $AGE_DAYS days, threshold: $MAX_AGE_DAYS days)"
+            fi
+          done
+
+          echo "ASGS_SCANNED=$SCANNED" >> $GITHUB_ENV
+          echo "ASGS_DELETED=$DELETED" >> $GITHUB_ENV
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      # Step 2: Cleanup Launch Configurations (after ASGs are deleted)
+      - name: Cleanup old Launch Configurations
+        id: cleanup-lcs
+        env:
+          AWS_ENDPOINT_URL: ${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/autoscaling
+        run: |
+          echo "### Launch Configurations" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "Scanning for orphaned Launch Configurations (prefix: test-k8s-, older than $MAX_AGE_DAYS days)"
+
+          CURRENT_TIME=$(date +%s)
+
+          # List all Launch Configurations
+          LCS_JSON=$(aws autoscaling describe-launch-configurations --output json --no-verify-ssl 2>/dev/null || echo '{"LaunchConfigurations":[]}')
+
+          # Filter for names starting with "test-k8s-"
+          LCS=$(echo "$LCS_JSON" | jq -r '.LaunchConfigurations[] | select(.LaunchConfigurationName | startswith("test-k8s-")) | .LaunchConfigurationName')
+
+          if [ -z "$LCS" ]; then
+            echo "No test-k8s-* Launch Configurations found"
+            echo "No test-k8s-* Launch Configurations found." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          SCANNED=0
+          DELETED=0
+
+          for LC in $LCS; do
+            SCANNED=$((SCANNED + 1))
+
+            # Get LC details including creation date
+            LC_INFO=$(echo "$LCS_JSON" | jq -r --arg name "$LC" '.LaunchConfigurations[] | select(.LaunchConfigurationName == $name)')
+            CREATE_DATE=$(echo "$LC_INFO" | jq -r '.CreatedTime // ""')
+
+            if [ -z "$CREATE_DATE" ] || [ "$CREATE_DATE" = "null" ]; then
+              echo "::warning::Could not get creation date for LC: $LC - skipping age check, treating as old"
+              AGE_DAYS=999
+            else
+              CREATE_EPOCH=$(date -d "$CREATE_DATE" +%s 2>/dev/null || echo "0")
+              if [ "$CREATE_EPOCH" = "0" ]; then
+                echo "::warning::Could not parse creation date for LC: $LC"
+                continue
+              fi
+              AGE_DAYS=$(( (CURRENT_TIME - CREATE_EPOCH) / 86400 ))
+            fi
+
+            echo "Found: $LC (age: $AGE_DAYS days)"
+
+            if [ $AGE_DAYS -gt $MAX_AGE_DAYS ]; then
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "Would delete: $LC (age: $AGE_DAYS days)"
+                echo "- Would delete: \`$LC\` (age: $AGE_DAYS days)" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "Deleting Launch Configuration: $LC"
+                if aws autoscaling delete-launch-configuration \
+                  --launch-configuration-name "$LC" \
+                  --no-verify-ssl 2>/dev/null; then
+                  echo "Deleted: $LC"
+                  echo "- Deleted: \`$LC\` (age: $AGE_DAYS days)" >> $GITHUB_STEP_SUMMARY
+                  DELETED=$((DELETED + 1))
+                else
+                  echo "::warning::Failed to delete Launch Configuration: $LC"
+                  echo "ERRORS=$((ERRORS + 1))" >> $GITHUB_ENV
+                fi
+              fi
+            else
+              echo "Keeping: $LC (age: $AGE_DAYS days, threshold: $MAX_AGE_DAYS days)"
+            fi
+          done
+
+          echo "LCS_SCANNED=$SCANNED" >> $GITHUB_ENV
+          echo "LCS_DELETED=$DELETED" >> $GITHUB_ENV
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      # Step 3: Cleanup Load Balancers (after ASGs, before Security Groups)
+      - name: Cleanup old Load Balancers
+        id: cleanup-lbs
+        env:
+          AWS_ENDPOINT_URL: ${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/elbv2
+        run: |
+          echo "### Load Balancers" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "Scanning for orphaned Load Balancers (prefix: test-k8s-, older than $MAX_AGE_DAYS days)"
+
+          CURRENT_TIME=$(date +%s)
+
+          # List all Load Balancers
+          LBS_JSON=$(aws elbv2 describe-load-balancers --output json --no-verify-ssl 2>/dev/null || echo '{"LoadBalancers":[]}')
+
+          # Filter for names starting with "test-k8s-"
+          LBS=$(echo "$LBS_JSON" | jq -r '.LoadBalancers[] | select(.LoadBalancerName | startswith("test-k8s-")) | "\(.LoadBalancerName)|\(.LoadBalancerArn)"')
+
+          if [ -z "$LBS" ]; then
+            echo "No test-k8s-* Load Balancers found"
+            echo "No test-k8s-* Load Balancers found." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          SCANNED=0
+          DELETED=0
+
+          echo "$LBS" | while IFS='|' read -r LB_NAME LB_ARN; do
+            [ -z "$LB_NAME" ] && continue
+            SCANNED=$((SCANNED + 1))
+
+            # Get LB creation time
+            LB_INFO=$(echo "$LBS_JSON" | jq -r --arg name "$LB_NAME" '.LoadBalancers[] | select(.LoadBalancerName == $name)')
+            CREATE_DATE=$(echo "$LB_INFO" | jq -r '.CreatedTime // ""')
+
+            if [ -z "$CREATE_DATE" ] || [ "$CREATE_DATE" = "null" ]; then
+              echo "::warning::Could not get creation date for LB: $LB_NAME - skipping age check, treating as old"
+              AGE_DAYS=999
+            else
+              CREATE_EPOCH=$(date -d "$CREATE_DATE" +%s 2>/dev/null || echo "0")
+              if [ "$CREATE_EPOCH" = "0" ]; then
+                echo "::warning::Could not parse creation date for LB: $LB_NAME"
+                continue
+              fi
+              AGE_DAYS=$(( (CURRENT_TIME - CREATE_EPOCH) / 86400 ))
+            fi
+
+            echo "Found: $LB_NAME (age: $AGE_DAYS days)"
+
+            if [ $AGE_DAYS -gt $MAX_AGE_DAYS ]; then
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "Would delete: $LB_NAME (age: $AGE_DAYS days)"
+                echo "- Would delete: \`$LB_NAME\` (age: $AGE_DAYS days)" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "Deleting Load Balancer: $LB_NAME"
+
+                # First, delete associated listeners
+                LISTENERS=$(aws elbv2 describe-listeners --load-balancer-arn "$LB_ARN" --output json --no-verify-ssl 2>/dev/null || echo '{"Listeners":[]}')
+                LISTENER_ARNS=$(echo "$LISTENERS" | jq -r '.Listeners[].ListenerArn // empty')
+                for LISTENER_ARN in $LISTENER_ARNS; do
+                  echo "  Deleting listener: $LISTENER_ARN"
+                  aws elbv2 delete-listener --listener-arn "$LISTENER_ARN" --no-verify-ssl 2>/dev/null || true
+                done
+
+                # Delete the load balancer
+                if aws elbv2 delete-load-balancer --load-balancer-arn "$LB_ARN" --no-verify-ssl 2>/dev/null; then
+                  echo "Deleted: $LB_NAME"
+                  echo "- Deleted: \`$LB_NAME\` (age: $AGE_DAYS days)" >> $GITHUB_STEP_SUMMARY
+                  DELETED=$((DELETED + 1))
+                else
+                  echo "::warning::Failed to delete Load Balancer: $LB_NAME"
+                  echo "ERRORS=$((ERRORS + 1))" >> $GITHUB_ENV
+                fi
+              fi
+            else
+              echo "Keeping: $LB_NAME (age: $AGE_DAYS days, threshold: $MAX_AGE_DAYS days)"
+            fi
+          done
+
+          echo "LBS_SCANNED=$(echo "$LBS" | grep -c . || echo 0)" >> $GITHUB_ENV
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      # Step 4: Cleanup Target Groups (associated with Load Balancers)
+      - name: Cleanup old Target Groups
+        id: cleanup-tgs
+        env:
+          AWS_ENDPOINT_URL: ${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/elbv2
+        run: |
+          echo "### Target Groups" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "Scanning for orphaned Target Groups (prefix: test-k8s-)"
+
+          # List all Target Groups
+          TGS_JSON=$(aws elbv2 describe-target-groups --output json --no-verify-ssl 2>/dev/null || echo '{"TargetGroups":[]}')
+
+          # Filter for names starting with "test-k8s-"
+          TGS=$(echo "$TGS_JSON" | jq -r '.TargetGroups[] | select(.TargetGroupName | startswith("test-k8s-")) | "\(.TargetGroupName)|\(.TargetGroupArn)"')
+
+          if [ -z "$TGS" ]; then
+            echo "No test-k8s-* Target Groups found"
+            echo "No test-k8s-* Target Groups found." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          DELETED=0
+
+          echo "$TGS" | while IFS='|' read -r TG_NAME TG_ARN; do
+            [ -z "$TG_NAME" ] && continue
+
+            echo "Found: $TG_NAME"
+
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "Would delete: $TG_NAME"
+              echo "- Would delete: \`$TG_NAME\`" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "Deleting Target Group: $TG_NAME"
+              if aws elbv2 delete-target-group --target-group-arn "$TG_ARN" --no-verify-ssl 2>/dev/null; then
+                echo "Deleted: $TG_NAME"
+                echo "- Deleted: \`$TG_NAME\`" >> $GITHUB_STEP_SUMMARY
+                DELETED=$((DELETED + 1))
+              else
+                echo "::warning::Failed to delete Target Group: $TG_NAME (may still be in use)"
+              fi
+            fi
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      # Step 5: Cleanup Security Groups (after ASGs and LBs, before VPC)
+      - name: Cleanup old Security Groups
+        id: cleanup-sgs
+        env:
+          AWS_ENDPOINT_URL: ${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/ec2
+        run: |
+          echo "### Security Groups" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "Scanning for orphaned Security Groups (prefix: test-k8s-)"
+
+          # List all Security Groups
+          SGS_JSON=$(aws ec2 describe-security-groups --output json --no-verify-ssl 2>/dev/null || echo '{"SecurityGroups":[]}')
+
+          # Filter for names starting with "test-k8s-" (exclude default SGs)
+          SGS=$(echo "$SGS_JSON" | jq -r '.SecurityGroups[] | select(.GroupName | startswith("test-k8s-")) | "\(.GroupName)|\(.GroupId)"')
+
+          if [ -z "$SGS" ]; then
+            echo "No test-k8s-* Security Groups found"
+            echo "No test-k8s-* Security Groups found." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          SCANNED=0
+          DELETED=0
+
+          echo "$SGS" | while IFS='|' read -r SG_NAME SG_ID; do
+            [ -z "$SG_NAME" ] && continue
+            SCANNED=$((SCANNED + 1))
+
+            echo "Found: $SG_NAME ($SG_ID)"
+
+            # Security groups don't have creation timestamps - delete if they match naming
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "Would delete: $SG_NAME ($SG_ID)"
+              echo "- Would delete: \`$SG_NAME\` ($SG_ID)" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "Deleting Security Group: $SG_NAME"
+
+              # First, remove all ingress/egress rules that reference this SG
+              # This handles circular references between SGs
+              aws ec2 revoke-security-group-ingress \
+                --group-id "$SG_ID" \
+                --source-group "$SG_ID" \
+                --protocol all \
+                --no-verify-ssl 2>/dev/null || true
+
+              aws ec2 revoke-security-group-egress \
+                --group-id "$SG_ID" \
+                --source-group "$SG_ID" \
+                --protocol all \
+                --no-verify-ssl 2>/dev/null || true
+
+              if aws ec2 delete-security-group --group-id "$SG_ID" --no-verify-ssl 2>/dev/null; then
+                echo "Deleted: $SG_NAME"
+                echo "- Deleted: \`$SG_NAME\` ($SG_ID)" >> $GITHUB_STEP_SUMMARY
+                DELETED=$((DELETED + 1))
+              else
+                echo "::warning::Failed to delete Security Group: $SG_NAME (may still be in use)"
+              fi
+            fi
+          done
+
+          echo "SGS_SCANNED=$(echo "$SGS" | grep -c . || echo 0)" >> $GITHUB_ENV
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      # Step 6a: Cleanup IAM Instance Profiles
+      - name: Cleanup old IAM Instance Profiles
+        id: cleanup-profiles
+        env:
+          AWS_ENDPOINT_URL: ${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/iam
+        run: |
+          echo "### IAM Instance Profiles" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "Scanning for orphaned instance profiles (prefix: test-k8s-, older than $MAX_AGE_DAYS days)"
+
+          CURRENT_TIME=$(date +%s)
+
+          # List all instance profiles
+          PROFILES_JSON=$(aws iam list-instance-profiles --output json --no-verify-ssl 2>/dev/null || echo '{"InstanceProfiles":[]}')
+
+          # Filter for names starting with "test-k8s-"
+          PROFILES=$(echo "$PROFILES_JSON" | jq -r '.InstanceProfiles[] | select(.InstanceProfileName | startswith("test-k8s-")) | .InstanceProfileName')
+
+          if [ -z "$PROFILES" ]; then
+            echo "No test-k8s-* instance profiles found"
+            echo "No test-k8s-* instance profiles found." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          SCANNED=0
+          DELETED=0
+
+          for PROFILE in $PROFILES; do
+            SCANNED=$((SCANNED + 1))
+
+            # Get profile details including creation date
+            PROFILE_INFO=$(aws iam get-instance-profile --instance-profile-name "$PROFILE" --output json --no-verify-ssl 2>/dev/null || echo '{}')
+            CREATE_DATE=$(echo "$PROFILE_INFO" | jq -r '.InstanceProfile.CreateDate // ""')
+
+            if [ -z "$CREATE_DATE" ] || [ "$CREATE_DATE" = "null" ]; then
+              echo "::warning::Could not get creation date for profile: $PROFILE - skipping age check, treating as old"
+              AGE_DAYS=999
+            else
+              CREATE_EPOCH=$(date -d "$CREATE_DATE" +%s 2>/dev/null || echo "0")
+              if [ "$CREATE_EPOCH" = "0" ]; then
+                echo "::warning::Could not parse creation date for profile: $PROFILE"
+                continue
+              fi
+              AGE_DAYS=$(( (CURRENT_TIME - CREATE_EPOCH) / 86400 ))
+            fi
+
+            echo "Found: $PROFILE (age: $AGE_DAYS days)"
+
+            if [ $AGE_DAYS -gt $MAX_AGE_DAYS ]; then
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "Would delete: $PROFILE (age: $AGE_DAYS days)"
+                echo "- Would delete: \`$PROFILE\` (age: $AGE_DAYS days)" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "Deleting instance profile: $PROFILE"
+
+                # First, remove any roles from the profile
+                ROLES_IN_PROFILE=$(echo "$PROFILE_INFO" | jq -r '.InstanceProfile.Roles[].RoleName // empty')
+                for ROLE in $ROLES_IN_PROFILE; do
+                  echo "  Removing role $ROLE from profile $PROFILE"
+                  aws iam remove-role-from-instance-profile \
+                    --instance-profile-name "$PROFILE" \
+                    --role-name "$ROLE" \
+                    --no-verify-ssl 2>/dev/null || true
+                done
+
+                # Delete the profile
+                if aws iam delete-instance-profile --instance-profile-name "$PROFILE" --no-verify-ssl 2>/dev/null; then
+                  echo "Deleted: $PROFILE"
+                  echo "- Deleted: \`$PROFILE\` (age: $AGE_DAYS days)" >> $GITHUB_STEP_SUMMARY
+                  DELETED=$((DELETED + 1))
+                else
+                  echo "::warning::Failed to delete instance profile: $PROFILE"
+                  echo "ERRORS=$((ERRORS + 1))" >> $GITHUB_ENV
+                fi
+              fi
+            else
+              echo "Keeping: $PROFILE (age: $AGE_DAYS days, threshold: $MAX_AGE_DAYS days)"
+            fi
+          done
+
+          echo "PROFILES_SCANNED=$SCANNED" >> $GITHUB_ENV
+          echo "PROFILES_DELETED=$DELETED" >> $GITHUB_ENV
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      # Step 6b: Cleanup IAM Roles
+      - name: Cleanup old IAM Roles
+        id: cleanup-roles
+        env:
+          AWS_ENDPOINT_URL: ${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/iam
+        run: |
+          echo "### IAM Roles" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "Scanning for orphaned roles (prefix: test-k8s-role-, older than $MAX_AGE_DAYS days)"
+
+          CURRENT_TIME=$(date +%s)
+
+          # List all roles
+          ROLES_JSON=$(aws iam list-roles --output json --no-verify-ssl 2>/dev/null || echo '{"Roles":[]}')
+
+          # Filter for names starting with "test-k8s-role-"
+          ROLES=$(echo "$ROLES_JSON" | jq -r '.Roles[] | select(.RoleName | startswith("test-k8s-role-")) | .RoleName')
+
+          if [ -z "$ROLES" ]; then
+            echo "No test-k8s-role-* roles found"
+            echo "No test-k8s-role-* roles found." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          SCANNED=0
+          DELETED=0
+
+          for ROLE in $ROLES; do
+            SCANNED=$((SCANNED + 1))
+
+            # Get role details
+            ROLE_INFO=$(aws iam get-role --role-name "$ROLE" --output json --no-verify-ssl 2>/dev/null || echo '{}')
+            CREATE_DATE=$(echo "$ROLE_INFO" | jq -r '.Role.CreateDate // ""')
+
+            if [ -z "$CREATE_DATE" ] || [ "$CREATE_DATE" = "null" ]; then
+              echo "::warning::Could not get creation date for role: $ROLE - skipping age check, treating as old"
+              AGE_DAYS=999
+            else
+              CREATE_EPOCH=$(date -d "$CREATE_DATE" +%s 2>/dev/null || echo "0")
+              if [ "$CREATE_EPOCH" = "0" ]; then
+                echo "::warning::Could not parse creation date for role: $ROLE"
+                continue
+              fi
+              AGE_DAYS=$(( (CURRENT_TIME - CREATE_EPOCH) / 86400 ))
+            fi
+
+            echo "Found: $ROLE (age: $AGE_DAYS days)"
+
+            if [ $AGE_DAYS -gt $MAX_AGE_DAYS ]; then
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "Would delete: $ROLE (age: $AGE_DAYS days)"
+                echo "- Would delete: \`$ROLE\` (age: $AGE_DAYS days)" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "Deleting role: $ROLE"
+
+                # First, detach all managed policies
+                ATTACHED=$(aws iam list-attached-role-policies --role-name "$ROLE" --output json --no-verify-ssl 2>/dev/null || echo '{"AttachedPolicies":[]}')
+                POLICY_ARNS=$(echo "$ATTACHED" | jq -r '.AttachedPolicies[].PolicyArn // empty')
+                for POLICY_ARN in $POLICY_ARNS; do
+                  echo "  Detaching policy $POLICY_ARN from role $ROLE"
+                  aws iam detach-role-policy \
+                    --role-name "$ROLE" \
+                    --policy-arn "$POLICY_ARN" \
+                    --no-verify-ssl 2>/dev/null || true
+                done
+
+                # Delete inline policies
+                INLINE=$(aws iam list-role-policies --role-name "$ROLE" --output json --no-verify-ssl 2>/dev/null || echo '{"PolicyNames":[]}')
+                INLINE_NAMES=$(echo "$INLINE" | jq -r '.PolicyNames[] // empty')
+                for POLICY_NAME in $INLINE_NAMES; do
+                  echo "  Deleting inline policy $POLICY_NAME from role $ROLE"
+                  aws iam delete-role-policy \
+                    --role-name "$ROLE" \
+                    --policy-name "$POLICY_NAME" \
+                    --no-verify-ssl 2>/dev/null || true
+                done
+
+                # Delete the role
+                if aws iam delete-role --role-name "$ROLE" --no-verify-ssl 2>/dev/null; then
+                  echo "Deleted: $ROLE"
+                  echo "- Deleted: \`$ROLE\` (age: $AGE_DAYS days)" >> $GITHUB_STEP_SUMMARY
+                  DELETED=$((DELETED + 1))
+                else
+                  echo "::warning::Failed to delete role: $ROLE"
+                  echo "ERRORS=$((ERRORS + 1))" >> $GITHUB_ENV
+                fi
+              fi
+            else
+              echo "Keeping: $ROLE (age: $AGE_DAYS days, threshold: $MAX_AGE_DAYS days)"
+            fi
+          done
+
+          echo "ROLES_SCANNED=$SCANNED" >> $GITHUB_ENV
+          echo "ROLES_DELETED=$DELETED" >> $GITHUB_ENV
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      # Step 6c: Cleanup IAM Policies
+      - name: Cleanup old IAM Policies
+        id: cleanup-policies
+        env:
+          AWS_ENDPOINT_URL: ${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/iam
+        run: |
+          echo "### IAM Policies" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "Scanning for orphaned policies (prefix: test-k8s-policy-, older than $MAX_AGE_DAYS days)"
+
+          CURRENT_TIME=$(date +%s)
+
+          # List all local (customer-managed) policies
+          POLICIES_JSON=$(aws iam list-policies --scope Local --output json --no-verify-ssl 2>/dev/null || echo '{"Policies":[]}')
+
+          # Filter for names starting with "test-k8s-policy-"
+          POLICIES=$(echo "$POLICIES_JSON" | jq -r '.Policies[] | select(.PolicyName | startswith("test-k8s-policy-")) | "\(.PolicyName)|\(.Arn)"')
+
+          if [ -z "$POLICIES" ]; then
+            echo "No test-k8s-policy-* policies found"
+            echo "No test-k8s-policy-* policies found." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          SCANNED=0
+          DELETED=0
+
+          echo "$POLICIES" | while IFS='|' read -r POLICY_NAME POLICY_ARN; do
+            [ -z "$POLICY_NAME" ] && continue
+            SCANNED=$((SCANNED + 1))
+
+            # Get policy details
+            POLICY_INFO=$(aws iam get-policy --policy-arn "$POLICY_ARN" --output json --no-verify-ssl 2>/dev/null || echo '{}')
+            CREATE_DATE=$(echo "$POLICY_INFO" | jq -r '.Policy.CreateDate // ""')
+
+            if [ -z "$CREATE_DATE" ] || [ "$CREATE_DATE" = "null" ]; then
+              echo "::warning::Could not get creation date for policy: $POLICY_NAME - skipping age check, treating as old"
+              AGE_DAYS=999
+            else
+              CREATE_EPOCH=$(date -d "$CREATE_DATE" +%s 2>/dev/null || echo "0")
+              if [ "$CREATE_EPOCH" = "0" ]; then
+                echo "::warning::Could not parse creation date for policy: $POLICY_NAME"
+                continue
+              fi
+              AGE_DAYS=$(( (CURRENT_TIME - CREATE_EPOCH) / 86400 ))
+            fi
+
+            echo "Found: $POLICY_NAME (age: $AGE_DAYS days)"
+
+            if [ $AGE_DAYS -gt $MAX_AGE_DAYS ]; then
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "Would delete: $POLICY_NAME (age: $AGE_DAYS days)"
+                echo "- Would delete: \`$POLICY_NAME\` (age: $AGE_DAYS days)" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "Deleting policy: $POLICY_NAME"
+
+                # First, detach from all entities
+                ENTITIES=$(aws iam list-entities-for-policy --policy-arn "$POLICY_ARN" --output json --no-verify-ssl 2>/dev/null || echo '{}')
+
+                # Detach from roles
+                ROLE_NAMES=$(echo "$ENTITIES" | jq -r '.PolicyRoles[].RoleName // empty')
+                for ROLE_NAME in $ROLE_NAMES; do
+                  echo "  Detaching from role: $ROLE_NAME"
+                  aws iam detach-role-policy \
+                    --role-name "$ROLE_NAME" \
+                    --policy-arn "$POLICY_ARN" \
+                    --no-verify-ssl 2>/dev/null || true
+                done
+
+                # Detach from users
+                USER_NAMES=$(echo "$ENTITIES" | jq -r '.PolicyUsers[].UserName // empty')
+                for USER_NAME in $USER_NAMES; do
+                  echo "  Detaching from user: $USER_NAME"
+                  aws iam detach-user-policy \
+                    --user-name "$USER_NAME" \
+                    --policy-arn "$POLICY_ARN" \
+                    --no-verify-ssl 2>/dev/null || true
+                done
+
+                # Detach from groups
+                GROUP_NAMES=$(echo "$ENTITIES" | jq -r '.PolicyGroups[].GroupName // empty')
+                for GROUP_NAME in $GROUP_NAMES; do
+                  echo "  Detaching from group: $GROUP_NAME"
+                  aws iam detach-group-policy \
+                    --group-name "$GROUP_NAME" \
+                    --policy-arn "$POLICY_ARN" \
+                    --no-verify-ssl 2>/dev/null || true
+                done
+
+                # Delete the policy
+                if aws iam delete-policy --policy-arn "$POLICY_ARN" --no-verify-ssl 2>/dev/null; then
+                  echo "Deleted: $POLICY_NAME"
+                  echo "- Deleted: \`$POLICY_NAME\` (age: $AGE_DAYS days)" >> $GITHUB_STEP_SUMMARY
+                  DELETED=$((DELETED + 1))
+                else
+                  echo "::warning::Failed to delete policy: $POLICY_NAME"
+                  echo "ERRORS=$((ERRORS + 1))" >> $GITHUB_ENV
+                fi
+              fi
+            else
+              echo "Keeping: $POLICY_NAME (age: $AGE_DAYS days, threshold: $MAX_AGE_DAYS days)"
+            fi
+          done
+
+          echo "POLICIES_SCANNED=$(echo "$POLICIES" | grep -c . || echo 0)" >> $GITHUB_ENV
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      # Step 7: Cleanup VPCs (last, after all other resources)
+      - name: Cleanup old VPCs
+        id: cleanup-vpcs
+        env:
+          AWS_ENDPOINT_URL: ${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/ec2
+        run: |
+          echo "### VPCs" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "Scanning for orphaned VPCs (Name tag prefix: test-k8s-)"
+
+          # List all VPCs
+          VPCS_JSON=$(aws ec2 describe-vpcs --output json --no-verify-ssl 2>/dev/null || echo '{"Vpcs":[]}')
+
+          # Filter for VPCs with Name tag starting with "test-k8s-"
+          VPCS=$(echo "$VPCS_JSON" | jq -r '.Vpcs[] | select(.Tags[]? | select(.Key == "Name" and (.Value | startswith("test-k8s-")))) | "\(.VpcId)|\(.Tags[] | select(.Key == "Name") | .Value)"')
+
+          if [ -z "$VPCS" ]; then
+            echo "No test-k8s-* VPCs found"
+            echo "No test-k8s-* VPCs found." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          SCANNED=0
+          DELETED=0
+
+          echo "$VPCS" | while IFS='|' read -r VPC_ID VPC_NAME; do
+            [ -z "$VPC_ID" ] && continue
+            SCANNED=$((SCANNED + 1))
+
+            echo "Found: $VPC_NAME ($VPC_ID)"
+
+            # VPCs don't have creation timestamps - delete if they match naming
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "Would delete: $VPC_NAME ($VPC_ID)"
+              echo "- Would delete: \`$VPC_NAME\` ($VPC_ID)" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "Deleting VPC: $VPC_NAME ($VPC_ID)"
+
+              # Delete subnets first
+              SUBNETS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --output json --no-verify-ssl 2>/dev/null || echo '{"Subnets":[]}')
+              SUBNET_IDS=$(echo "$SUBNETS" | jq -r '.Subnets[].SubnetId // empty')
+              for SUBNET_ID in $SUBNET_IDS; do
+                echo "  Deleting subnet: $SUBNET_ID"
+                aws ec2 delete-subnet --subnet-id "$SUBNET_ID" --no-verify-ssl 2>/dev/null || true
+              done
+
+              # Delete route tables (non-main)
+              RTS=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$VPC_ID" --output json --no-verify-ssl 2>/dev/null || echo '{"RouteTables":[]}')
+              RT_IDS=$(echo "$RTS" | jq -r '.RouteTables[] | select(.Associations[0].Main != true) | .RouteTableId // empty')
+              for RT_ID in $RT_IDS; do
+                # First disassociate from subnets
+                ASSOCS=$(echo "$RTS" | jq -r --arg rtid "$RT_ID" '.RouteTables[] | select(.RouteTableId == $rtid) | .Associations[].RouteTableAssociationId // empty')
+                for ASSOC in $ASSOCS; do
+                  echo "  Disassociating route table: $ASSOC"
+                  aws ec2 disassociate-route-table --association-id "$ASSOC" --no-verify-ssl 2>/dev/null || true
+                done
+                echo "  Deleting route table: $RT_ID"
+                aws ec2 delete-route-table --route-table-id "$RT_ID" --no-verify-ssl 2>/dev/null || true
+              done
+
+              # Detach and delete internet gateways
+              IGWS=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$VPC_ID" --output json --no-verify-ssl 2>/dev/null || echo '{"InternetGateways":[]}')
+              IGW_IDS=$(echo "$IGWS" | jq -r '.InternetGateways[].InternetGatewayId // empty')
+              for IGW_ID in $IGW_IDS; do
+                echo "  Detaching internet gateway: $IGW_ID"
+                aws ec2 detach-internet-gateway --internet-gateway-id "$IGW_ID" --vpc-id "$VPC_ID" --no-verify-ssl 2>/dev/null || true
+                echo "  Deleting internet gateway: $IGW_ID"
+                aws ec2 delete-internet-gateway --internet-gateway-id "$IGW_ID" --no-verify-ssl 2>/dev/null || true
+              done
+
+              # Delete NAT gateways (if any)
+              NATS=$(aws ec2 describe-nat-gateways --filter "Name=vpc-id,Values=$VPC_ID" --output json --no-verify-ssl 2>/dev/null || echo '{"NatGateways":[]}')
+              NAT_IDS=$(echo "$NATS" | jq -r '.NatGateways[] | select(.State != "deleted") | .NatGatewayId // empty')
+              for NAT_ID in $NAT_IDS; do
+                echo "  Deleting NAT gateway: $NAT_ID"
+                aws ec2 delete-nat-gateway --nat-gateway-id "$NAT_ID" --no-verify-ssl 2>/dev/null || true
+              done
+
+              # Delete remaining security groups (non-default)
+              SGS=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" --output json --no-verify-ssl 2>/dev/null || echo '{"SecurityGroups":[]}')
+              SG_IDS=$(echo "$SGS" | jq -r '.SecurityGroups[] | select(.GroupName != "default") | .GroupId // empty')
+              for SG_ID in $SG_IDS; do
+                echo "  Deleting security group: $SG_ID"
+                aws ec2 delete-security-group --group-id "$SG_ID" --no-verify-ssl 2>/dev/null || true
+              done
+
+              # Delete network ACLs (non-default)
+              ACLS=$(aws ec2 describe-network-acls --filters "Name=vpc-id,Values=$VPC_ID" --output json --no-verify-ssl 2>/dev/null || echo '{"NetworkAcls":[]}')
+              ACL_IDS=$(echo "$ACLS" | jq -r '.NetworkAcls[] | select(.IsDefault != true) | .NetworkAclId // empty')
+              for ACL_ID in $ACL_IDS; do
+                echo "  Deleting network ACL: $ACL_ID"
+                aws ec2 delete-network-acl --network-acl-id "$ACL_ID" --no-verify-ssl 2>/dev/null || true
+              done
+
+              # Finally, delete the VPC
+              if aws ec2 delete-vpc --vpc-id "$VPC_ID" --no-verify-ssl 2>/dev/null; then
+                echo "Deleted: $VPC_NAME ($VPC_ID)"
+                echo "- Deleted: \`$VPC_NAME\` ($VPC_ID)" >> $GITHUB_STEP_SUMMARY
+                DELETED=$((DELETED + 1))
+              else
+                echo "::warning::Failed to delete VPC: $VPC_NAME ($VPC_ID) - may have remaining dependencies"
+                echo "ERRORS=$((ERRORS + 1))" >> $GITHUB_ENV
+              fi
+            fi
+          done
+
+          echo "VPCS_SCANNED=$(echo "$VPCS" | grep -c . || echo 0)" >> $GITHUB_ENV
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: Write summary
+        if: always()
+        run: |
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "### Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Resource Type | Scanned | Deleted |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------------|---------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Auto Scaling Groups | $ASGS_SCANNED | $ASGS_DELETED |" >> $GITHUB_STEP_SUMMARY
+          echo "| Launch Configurations | $LCS_SCANNED | $LCS_DELETED |" >> $GITHUB_STEP_SUMMARY
+          echo "| Load Balancers | $LBS_SCANNED | ${LBS_DELETED:-0} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Groups | $SGS_SCANNED | ${SGS_DELETED:-0} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Instance Profiles | $PROFILES_SCANNED | $PROFILES_DELETED |" >> $GITHUB_STEP_SUMMARY
+          echo "| Roles | $ROLES_SCANNED | $ROLES_DELETED |" >> $GITHUB_STEP_SUMMARY
+          echo "| Policies | $POLICIES_SCANNED | ${POLICIES_DELETED:-0} |" >> $GITHUB_STEP_SUMMARY
+          echo "| VPCs | $VPCS_SCANNED | ${VPCS_DELETED:-0} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${ERRORS:-0}" -gt 0 ]; then
+            echo "**Errors encountered:** $ERRORS" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "**This was a dry run.** No resources were actually deleted." >> $GITHUB_STEP_SUMMARY
+            echo "To delete resources, run the workflow with dry_run=false." >> $GITHUB_STEP_SUMMARY
+          fi
