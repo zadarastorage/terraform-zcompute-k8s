@@ -45,3 +45,7 @@ AVD-AWS-0057
 # VPC Flow Logging (from external VPC module)
 # Optional feature managed in the VPC module
 AVD-AWS-0178
+
+# Security Group - Unrestricted SSH Ingress (bastion test fixture)
+# CI bastion requires SSH from any IP since GitHub runner IPs are dynamic
+AVD-AWS-0107
