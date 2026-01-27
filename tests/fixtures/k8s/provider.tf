@@ -29,9 +29,6 @@ provider "aws" {
   access_key = var.zcompute_access_key
   secret_key = var.zcompute_secret_key
 
-  default_tags {
-    tags = {
-      "managed-by" = "integration-test"
-    }
-  }
+  # No default_tags — not reliably supported by zCompute's AWS-compatible API.
+  # Tags are passed via module variables instead (see main.tf tags block).
 }

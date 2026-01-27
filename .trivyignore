@@ -22,12 +22,12 @@ AVD-AWS-0130
 # zCompute does not support IMDSv2
 AVD-AWS-0028
 
-# EC2 Detailed Monitoring (bastion in example)
-# zCompute does not support detailed monitoring
+# EC2 Detailed Monitoring (bastion in example and test fixture)
+# Not required for test/example infrastructure
 AVD-AWS-0029
 
-# EBS Optimized EC2 (bastion in example)
-# zCompute does not support EBS optimization
+# EBS Optimized EC2 (bastion in example and test fixture)
+# Not required for test/example infrastructure
 AVD-AWS-0024
 
 # EBS Encryption - Launch Configuration root block device

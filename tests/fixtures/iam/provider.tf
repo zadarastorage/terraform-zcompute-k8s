@@ -26,9 +26,5 @@ provider "aws" {
   access_key = var.zcompute_access_key
   secret_key = var.zcompute_secret_key
 
-  default_tags {
-    tags = {
-      "managed-by" = "integration-test"
-    }
-  }
+  # No default_tags — zCompute IAM does not support resource tagging.
 }

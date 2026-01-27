@@ -7,4 +7,8 @@ module "vpc" {
   # Create one public and one private subnet in the symphony AZ
   public_subnets  = ["10.200.0.0/17"]
   private_subnets = ["10.200.128.0/17"]
+
+  tags = {
+    "managed-by" = "integration-test"
+  }
 }
