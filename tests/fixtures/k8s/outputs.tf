@@ -13,3 +13,8 @@ output "cluster_token" {
   value       = var.cluster_token
   sensitive   = true
 }
+
+output "cluster_security_group_id" {
+  description = "ID of the cluster security group"
+  value       = module.k8s.cluster_security_group_id
+}

@@ -106,6 +106,7 @@ jobs:
           # Capture outputs for downstream fixtures
           echo "vpc_id=$(terraform output -raw vpc_id)" >> $GITHUB_OUTPUT
           echo "private_subnets=$(terraform output -json private_subnets)" >> $GITHUB_OUTPUT
+          echo "public_subnets=$(terraform output -json public_subnets)" >> $GITHUB_OUTPUT
 
           echo "::notice::VPC deployed successfully"
 
@@ -162,18 +163,76 @@ jobs:
           # Capture outputs
           echo "cluster_name=$(terraform output -raw cluster_name)" >> $GITHUB_OUTPUT
           echo "load_balancer_dns=$(terraform output -raw load_balancer_dns)" >> $GITHUB_OUTPUT
+          echo "cluster_security_group_id=$(terraform output -raw cluster_security_group_id)" >> $GITHUB_OUTPUT
 
           echo "::notice::K8s cluster deployed successfully"
 
+      # ============================================================
+      # Phase 3.5: Bastion (SSH jump host for private API access)
+      # ============================================================
+      - name: Bastion - Init
+        if: steps.k8s.outcome == 'success'
+        working-directory: tests/fixtures/bastion
+        run: terraform init -input=false
+
+      - name: Bastion - Apply
+        id: bastion
+        if: steps.k8s.outcome == 'success'
+        working-directory: tests/fixtures/bastion
+        env:
+          TF_VAR_vpc_id: ${{ steps.vpc.outputs.vpc_id }}
+          TF_VAR_public_subnets: ${{ steps.vpc.outputs.public_subnets }}
+          TF_VAR_cluster_security_group_id: ${{ steps.k8s.outputs.cluster_security_group_id }}
+          TF_VAR_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
+        run: |
+          echo "Deploying bastion host: test-k8s-${{ github.run_id }}-bastion"
+          terraform apply -auto-approve -input=false
+
+          # Capture bastion IP
+          echo "bastion_ip=$(terraform output -raw bastion_public_ip)" >> $GITHUB_OUTPUT
+
+          # Save SSH private key (never echo it)
+          terraform output -raw ssh_private_key > /tmp/bastion_ssh_key
+          chmod 600 /tmp/bastion_ssh_key
+
+          echo "::notice::Bastion host deployed successfully"
+
+      - name: Wait for bastion SSH readiness
+        if: steps.bastion.outcome == 'success'
+        timeout-minutes: 10
+        run: |
+          BASTION_IP="${{ steps.bastion.outputs.bastion_ip }}"
+          echo "Waiting for bastion SSH at ${BASTION_IP} (timeout: 10 minutes)"
+
+          RETRY=0
+          MAX_RETRY=40  # 40 * 15s = 10 min
+          while [ $RETRY -lt $MAX_RETRY ]; do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+                   -i /tmp/bastion_ssh_key "ubuntu@${BASTION_IP}" \
+                   "test -f /tmp/bastion-ready" 2>/dev/null; then
+              echo "Bastion is ready"
+              break
+            fi
+            echo "Attempt $((RETRY + 1))/$MAX_RETRY: bastion not ready yet..."
+            RETRY=$((RETRY + 1))
+            sleep 15
+          done
+
+          if [ $RETRY -ge $MAX_RETRY ]; then
+            echo "::error::Bastion SSH did not become ready within 10 minutes"
+            exit 1
+          fi
+
       - name: Generate kubeconfig
         id: kubeconfig
-        if: steps.k8s.outcome == 'success'
+        if: steps.bastion.outcome == 'success'
         working-directory: tests/fixtures/k8s
         run: |
           LB_DNS=$(terraform output -raw load_balancer_dns)
           TOKEN="${{ steps.token.outputs.token }}"
+          BASTION_IP="${{ steps.bastion.outputs.bastion_ip }}"
 
-          cat > kubeconfig.yaml << EOF
+          cat > /tmp/kubeconfig.yaml << EOF
           apiVersion: v1
           kind: Config
           clusters:
@@ -193,15 +252,24 @@ jobs:
               token: ${TOKEN}
           EOF
 
-          echo "KUBECONFIG=$(pwd)/kubeconfig.yaml" >> $GITHUB_OUTPUT
-          echo "::notice::kubeconfig generated at $(pwd)/kubeconfig.yaml"
+          # Copy kubeconfig to bastion
+          scp -o StrictHostKeyChecking=no -i /tmp/bastion_ssh_key \
+            /tmp/kubeconfig.yaml "ubuntu@${BASTION_IP}:~/kubeconfig.yaml"
+
+          echo "::notice::kubeconfig copied to bastion at ${BASTION_IP}"
 
       - name: Validate cluster health
         if: steps.kubeconfig.outcome == 'success'
         timeout-minutes: 15
-        env:
-          KUBECONFIG: ${{ steps.kubeconfig.outputs.KUBECONFIG }}
         run: |
+          BASTION_IP="${{ steps.bastion.outputs.bastion_ip }}"
+          SSH_OPTS="-o StrictHostKeyChecking=no -i /tmp/bastion_ssh_key"
+
+          bastion_kubectl() {
+            ssh $SSH_OPTS "ubuntu@${BASTION_IP}" \
+              "KUBECONFIG=~/kubeconfig.yaml kubectl $*"
+          }
+
           echo "Waiting for cluster to be healthy (timeout: 15 minutes)"
 
           # Poll for at least 1 node Ready (15s intervals, up to 60 retries = 15 min)
@@ -210,9 +278,9 @@ jobs:
           READY_NODES=0
 
           while [ $RETRY -lt $MAX_RETRY ]; do
-            NODES=$(kubectl get nodes --no-headers 2>/dev/null || echo "")
-            READY_NODES=$(echo "$NODES" | grep -c " Ready" || echo "0")
-            TOTAL_NODES=$(echo "$NODES" | grep -c "." || echo "0")
+            NODES=$(bastion_kubectl get nodes --no-headers 2>/dev/null || true)
+            READY_NODES=$(echo "$NODES" | grep -c " Ready" || true)
+            TOTAL_NODES=$(echo "$NODES" | grep -c "." || true)
 
             echo "Attempt $((RETRY + 1))/$MAX_RETRY: Nodes $READY_NODES/$TOTAL_NODES Ready"
 
@@ -228,31 +296,31 @@ jobs:
           if [ "$READY_NODES" -lt 1 ]; then
             echo "::error::No nodes became Ready within 15 minutes"
             echo "=== Node Status ==="
-            kubectl get nodes -o wide || true
+            bastion_kubectl get nodes -o wide || true
             echo "=== Node Descriptions ==="
-            kubectl describe nodes || true
+            bastion_kubectl describe nodes || true
             echo "=== System Events ==="
-            kubectl get events -n kube-system --sort-by='.lastTimestamp' || true
+            bastion_kubectl get events -n kube-system --sort-by='.lastTimestamp' || true
             exit 1
           fi
 
           echo "Checking for coredns pods..."
 
           # Wait for coredns to be Running (5 minute timeout)
-          if ! kubectl wait --for=condition=Ready pod -l k8s-app=kube-dns -n kube-system --timeout=300s; then
+          if ! bastion_kubectl wait --for=condition=Ready pod -l k8s-app=kube-dns -n kube-system --timeout=300s; then
             echo "::error::coredns pods not Ready within 5 minutes"
             echo "=== kube-system Pods ==="
-            kubectl get pods -n kube-system -o wide || true
+            bastion_kubectl get pods -n kube-system -o wide || true
             echo "=== coredns Pod Descriptions ==="
-            kubectl describe pods -n kube-system -l k8s-app=kube-dns || true
+            bastion_kubectl describe pods -n kube-system -l k8s-app=kube-dns || true
             exit 1
           fi
 
           echo "Cluster is healthy!"
 
           # Write health summary
-          READY_NODE_COUNT=$(kubectl get nodes --no-headers | grep -c " Ready" || echo "0")
-          COREDNS_COUNT=$(kubectl get pods -n kube-system -l k8s-app=kube-dns --no-headers | grep -c "Running" || echo "0")
+          READY_NODE_COUNT=$(bastion_kubectl get nodes --no-headers | grep -c " Ready" || true)
+          COREDNS_COUNT=$(bastion_kubectl get pods -n kube-system -l k8s-app=kube-dns --no-headers | grep -c "Running" || true)
 
           cat >> $GITHUB_STEP_SUMMARY << EOF
           ### Cluster Health Validation
@@ -267,8 +335,26 @@ jobs:
           EOF
 
       # ============================================================
-      # Cleanup: Reverse order (K8s -> IAM -> VPC)
+      # Cleanup: Reverse order (Bastion -> K8s -> IAM -> VPC)
       # ============================================================
+      - name: Bastion - Destroy
+        if: always() && steps.bastion.outcome == 'success' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_destroy != 'true')
+        working-directory: tests/fixtures/bastion
+        env:
+          TF_VAR_vpc_id: ${{ steps.vpc.outputs.vpc_id }}
+          TF_VAR_public_subnets: ${{ steps.vpc.outputs.public_subnets }}
+          TF_VAR_cluster_security_group_id: ${{ steps.k8s.outputs.cluster_security_group_id }}
+          TF_VAR_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
+        run: |
+          echo "Destroying bastion host: test-k8s-${{ github.run_id }}-bastion"
+          terraform destroy -auto-approve -input=false || {
+            echo "::warning::Bastion destroy failed, continuing with K8s/IAM/VPC cleanup"
+          }
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f /tmp/bastion_ssh_key /tmp/kubeconfig.yaml
+
       - name: K8s - Destroy
         if: always() && steps.k8s.outcome == 'success' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_destroy != 'true')
         working-directory: tests/fixtures/k8s
@@ -357,6 +443,7 @@ jobs:
           | VPC | Created and destroyed |
           | IAM Instance Profile | Created and destroyed |
           | K8s Cluster | Created, validated, and destroyed |
+          | Bastion Host | Created and destroyed |
           | Cluster Health | Nodes Ready, coredns Running |
           EOF
               echo "status=success" >> $GITHUB_OUTPUT
@@ -416,6 +503,7 @@ jobs:
             | VPC | Created and destroyed |
             | IAM Instance Profile | Created and destroyed |
             | K8s Cluster | Created, validated, and destroyed |
+            | Bastion Host | Created and destroyed |
             | Cluster Health | Nodes Ready, coredns Running |
 
             [View workflow run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
