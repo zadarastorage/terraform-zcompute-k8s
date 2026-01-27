@@ -17,6 +17,7 @@ variable "zcompute_secret_key" {
 provider "aws" {
   endpoints {
     ec2 = "${var.zcompute_endpoint_url}/api/v2/aws/ec2"
+    sts = "${var.zcompute_endpoint_url}/api/v2/aws/sts"
   }
 
   region   = "us-east-1"
