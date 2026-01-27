@@ -1,6 +1,10 @@
 # Checkov configuration for terraform-zcompute-k8s module
 # Suppressions with documented rationale for security audit
 
+# Do not scan external modules - they manage their own compliance
+# (e.g., VPC module has its own .checkov.yaml)
+download-external-modules: false
+
 skip-check:
   # K8s Cluster Security Groups
   # K8s nodes require full intra-cluster communication (ingress_k8s, egress_k8s rules in sg.tf)
@@ -15,20 +19,37 @@ skip-check:
   - CKV_AWS_260  # Security group allows 0.0.0.0/0 egress
 
   # Launch Configuration - EBS Encryption
-  # zCompute may not support EBS encryption feature
-  # Rationale: Platform limitation - encryption not available on zCompute infrastructure
-  # See root_block_device in launch_configuration.tf
+  # zCompute does not support EBS encryption
   - CKV_AWS_8    # EBS volume not encrypted
 
-  # Network Load Balancer Settings
-  # zCompute may not support NLB deletion protection or access logging features
-  # Rationale: Platform limitation - these AWS features may not be available on zCompute
-  # See aws_lb.kube_api in load_balancer.tf
+  # Network Load Balancer
+  # zCompute does not support NLB deletion protection, access logging, or cross-zone features
   - CKV_AWS_150  # NLB deletion protection not enabled
   - CKV_AWS_91   # Load balancer access logging not enabled
+  - CKV_AWS_152  # NLB cross-zone load balancing
 
-  # Module Source References in Examples
-  # Examples use GitHub ref or local source for demonstration purposes
-  # Rationale: Examples show how users would reference the module, not production pinning
+  # Auto Scaling Groups
+  # zCompute does not support launch templates; launch configurations are required
+  - CKV_AWS_315  # ASG should use launch templates
+
+  # Instance Metadata Service
+  # zCompute does not support IMDSv2
+  - CKV_AWS_79   # IMDSv1 enabled
+
+  # EC2 Instance Features
+  # zCompute does not support EBS optimization or detailed monitoring
+  - CKV_AWS_135  # EC2 EBS optimized
+  - CKV_AWS_126  # EC2 detailed monitoring
+
+  # ASG ELB Health Checks
+  # zCompute does not support ELB health check type on ASGs
+  - CKV2_AWS_15  # ASG associated with LB should use ELB health checks
+
+  # Bastion IAM Role (example only)
+  # Example bastion is a simple SSH jump box with no need for AWS API access
+  - CKV2_AWS_41  # IAM role attached to EC2 instance
+
+  # Module Source References
+  # Examples and test fixtures use local or GitHub ref sources
   - CKV_TF_1    # Module source not using commit hash
   - CKV_TF_2    # Module source not using version tag

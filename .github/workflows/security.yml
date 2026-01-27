@@ -67,7 +67,6 @@ jobs:
           output_format: cli,sarif
           output_file_path: console,checkov-results.sarif
           soft_fail: false
-          download_external_modules: true
           config_file: .checkov.yaml
 
       - name: Upload Checkov SARIF results

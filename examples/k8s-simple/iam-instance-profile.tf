@@ -1,6 +1,6 @@
 module "iam-instance-profile" {
-  source = "github.com/zadarastorage/terraform-zcompute-iam-instance-profile?ref=main"
-  # It's recommended to change `main` to a specific release version to prevent unexpected changes
+  source = "github.com/zadarastorage/terraform-zcompute-iam-instance-profile?ref=v1.0.0"
+  # For standalone use, replace with a specific release version
 
   name                  = "k8s-instance-profile"
   instance_profile_path = "/"

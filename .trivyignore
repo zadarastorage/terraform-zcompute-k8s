@@ -1,5 +1,5 @@
 # Trivy suppressions for terraform-zcompute-k8s module
-# Each suppression includes rationale for audit purposes
+# Each suppression documents the rationale for audit purposes
 
 # Security Group - Unrestricted Egress
 # K8s nodes require outbound internet for container image pulls
@@ -7,6 +7,33 @@
 AVD-AWS-0104
 
 # Load Balancer Access Logging
-# zCompute may not support this AWS feature
-# Rationale: Platform limitation on zCompute infrastructure
+# zCompute does not support this feature
 AVD-AWS-0053
+
+# Cross-zone Load Balancing
+# zCompute does not support cross-zone load balancing
+AVD-AWS-0005
+
+# Launch Configuration IMDSv2
+# zCompute does not support IMDSv2
+AVD-AWS-0130
+
+# EC2 Instance IMDSv2 (bastion in example)
+# zCompute does not support IMDSv2
+AVD-AWS-0028
+
+# EC2 Detailed Monitoring (bastion in example)
+# zCompute does not support detailed monitoring
+AVD-AWS-0029
+
+# EBS Optimized EC2 (bastion in example)
+# zCompute does not support EBS optimization
+AVD-AWS-0024
+
+# IAM Policy Wildcards (VPC flow log policy from external VPC module)
+# Managed in the VPC module's own configuration
+AVD-AWS-0057
+
+# VPC Flow Logging (from external VPC module)
+# Optional feature managed in the VPC module
+AVD-AWS-0178

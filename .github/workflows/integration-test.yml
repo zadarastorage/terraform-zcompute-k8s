@@ -67,7 +67,7 @@ jobs:
     timeout-minutes: 60
 
     env:
-      TF_VAR_zcompute_api_endpoint: ${{ secrets.ZCOMPUTE_ENDPOINT }}
+      TF_VAR_zcompute_endpoint_url: ${{ secrets.ZCOMPUTE_ENDPOINT }}
       TF_VAR_zcompute_access_key: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
       TF_VAR_zcompute_secret_key: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
       TF_VAR_run_id: ${{ github.run_id }}
