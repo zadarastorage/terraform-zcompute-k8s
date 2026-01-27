@@ -14,6 +14,18 @@ variable "cluster_token" {
   description = "Configure the node join token"
 }
 
+variable "default_instance_type" {
+  description = <<-EOT
+    Default instance type for K8s node groups.
+
+    Available instance type families vary by zCompute site hardware configuration.
+    Common families include z4 (e.g. z4.large) and zp4 (e.g. zp4.large). Consult
+    your zCompute site documentation or administrator to determine which instance
+    types are supported at your target site.
+  EOT
+  type        = string
+}
+
 module "k8s" {
   source = "../.."
   # For standalone use, replace with:
@@ -28,6 +40,8 @@ module "k8s" {
 
   cluster_name    = var.k8s_name
   cluster_version = var.k8s_version
+
+  default_instance_type = var.default_instance_type
 
   node_group_defaults = {
     cluster_flavor       = "k3s-ubuntu"

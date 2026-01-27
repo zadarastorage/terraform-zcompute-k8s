@@ -12,6 +12,8 @@ module "k8s" {
   cluster_version = "1.31.2"
   cluster_token   = var.cluster_token
 
+  default_instance_type = var.default_instance_type
+
   tags = {
     "managed-by" = "integration-test"
     "run-id"     = var.run_id

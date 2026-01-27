@@ -11,7 +11,7 @@ locals {
   node_group_defaults = {
     enabled          = true
     desired_capacity = 0
-    instance_type    = "z4.large"
+    instance_type    = var.default_instance_type
     root_volume_size = 40
     root_volume_type = null
     key_name         = null

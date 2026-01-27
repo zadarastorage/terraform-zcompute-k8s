@@ -148,6 +148,7 @@ jobs:
           TF_VAR_private_subnets: ${{ steps.vpc.outputs.private_subnets }}
           TF_VAR_iam_instance_profile: ${{ steps.iam.outputs.instance_profile_name }}
           TF_VAR_cluster_token: ${{ steps.token.outputs.token }}
+          TF_VAR_default_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
         run: |
           echo "Deploying K8s cluster: test-k8s-${{ github.run_id }}"
 
@@ -276,6 +277,7 @@ jobs:
           TF_VAR_private_subnets: ${{ steps.vpc.outputs.private_subnets }}
           TF_VAR_iam_instance_profile: ${{ steps.iam.outputs.instance_profile_name }}
           TF_VAR_cluster_token: ${{ steps.token.outputs.token }}
+          TF_VAR_default_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
         run: |
           echo "Destroying K8s cluster: test-k8s-${{ github.run_id }}"
           terraform destroy -auto-approve -input=false || {

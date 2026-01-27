@@ -34,17 +34,19 @@ module "k8s" {
   vpc_id  = module.vpc.vpc_id
   subnets = module.vpc.private_subnets
 
+  # Required: specify the instance type available at your zCompute site
+  default_instance_type = "z4.large"
+
   node_groups = {
     control-plane = {
-      role          = "control-plane"
-      instance_type = "z4.large"
-      min_size      = 1
-      max_size      = 3
-      desired_size  = 1
+      role         = "control-plane"
+      min_size     = 1
+      max_size     = 3
+      desired_size = 1
     }
     workers = {
       role          = "worker"
-      instance_type = "z4.xlarge"
+      instance_type = "z4.xlarge"  # Override default for workers
       min_size      = 1
       max_size      = 10
       desired_size  = 3

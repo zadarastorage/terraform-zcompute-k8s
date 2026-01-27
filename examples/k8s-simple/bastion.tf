@@ -8,6 +8,18 @@ variable "bastion_ssh_source_cidr" {
   description = "(No-effect if bastion is disabled) CIDR to restrict inbound SSH access of bastion host to. ex: 0.0.0.0/0 or 8.8.8.8/32"
 }
 
+variable "bastion_instance_type" {
+  description = <<-EOT
+    Instance type for the bastion jumphost.
+
+    Available instance type families vary by zCompute site hardware configuration.
+    Common families include z2 (e.g. z2.large), z4 (e.g. z4.large), and zp4
+    (e.g. zp4.large). Consult your zCompute site documentation or administrator
+    to determine which instance types are supported at your target site.
+  EOT
+  type        = string
+}
+
 locals {
   ami_options = [
     {
@@ -93,7 +105,7 @@ resource "aws_security_group_rule" "bastion" {
 resource "aws_instance" "bastion" {
   count = try(var.bastion_enabled, false) ? 1 : 0
 
-  instance_type = "z2.large"
+  instance_type = var.bastion_instance_type
   ami           = flatten(data.aws_ami_ids.bastion_ubuntu[*].ids)[0]
   key_name      = aws_key_pair.this.key_name
 

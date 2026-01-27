@@ -23,3 +23,8 @@ variable "cluster_token" {
   sensitive   = true
   description = "Token for cluster authentication and node join"
 }
+
+variable "default_instance_type" {
+  type        = string
+  description = "Default instance type for K8s node groups, provided by CI environment"
+}
