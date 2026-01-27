@@ -8,6 +8,10 @@ module "vpc" {
   public_subnets  = ["10.200.0.0/17"]
   private_subnets = ["10.200.128.0/17"]
 
+  # NAT gateway gives private-subnet nodes internet access for
+  # apt-get, AWS CLI install, container image pulls, etc.
+  enable_nat_gateway = true
+
   tags = {
     "managed-by" = "integration-test"
   }
