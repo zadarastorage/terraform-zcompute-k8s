@@ -80,10 +80,7 @@ resource "aws_security_group" "bastion" {
   description = "Bastion SSH access for integration tests"
   vpc_id      = var.vpc_id
 
-  tags = {
-    Name         = local.bastion_name
-    "managed-by" = "integration-test"
-  }
+  # No tags — zCompute CreateSecurityGroup rejects tags at creation time
 }
 
 resource "aws_security_group_rule" "bastion" {
@@ -105,10 +102,7 @@ resource "aws_instance" "bastion" {
   ami           = flatten(data.aws_ami_ids.bastion_ubuntu[*].ids)[0]
   key_name      = aws_key_pair.bastion.key_name
 
-  tags = {
-    Name         = local.bastion_name
-    "managed-by" = "integration-test"
-  }
+  tags = { Name = local.bastion_name }
 
   subnet_id = one(var.public_subnets)
 
@@ -148,9 +142,4 @@ resource "aws_instance" "bastion" {
 resource "aws_eip" "bastion" {
   instance = aws_instance.bastion.id
   domain   = "vpc"
-
-  tags = {
-    Name         = local.bastion_name
-    "managed-by" = "integration-test"
-  }
 }
