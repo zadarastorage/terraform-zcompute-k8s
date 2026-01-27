@@ -26,11 +26,9 @@ provider "aws" {
   access_key = var.zcompute_access_key
   secret_key = var.zcompute_secret_key
 
-  default_tags {
-    tags = {
-      "managed-by" = "integration-test"
-    }
-  }
+  # No default_tags: zCompute RunInstances rejects TagSpecification for
+  # resource type 'volume', which the provider sends when default_tags exist.
+  # Tags are applied directly on each resource instead.
 }
 
 provider "tls" {}
