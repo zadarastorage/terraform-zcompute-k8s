@@ -2,6 +2,48 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.0](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v2.0.0...v2.1.0) (2026-01-28)
+
+
+### Features
+
+* **01-01:** convert to release-please from semantic-release ([7359827](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/735982780ae7d5cb9781cb55f432250375812fcf))
+* **03-01:** add K8s baseline security configs ([cdafab0](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/cdafab0d40da85abe826e3b5fd5265ca4946d548))
+* **03-01:** add security scanning workflow ([c021536](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/c021536474430bb90cbe8eb1fdbe4093cd08b963))
+* **06-01:** add IAM test fixture ([f6d8b39](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/f6d8b39355a44b160d09da9952def4a4a5f0a5a3))
+* **06-01:** add K8s test fixture ([1e5c950](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/1e5c9508b57aa9c9a368bf286d1975fb0310a94f))
+* **06-01:** add VPC test fixture ([282b84d](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/282b84d10f45dbe0216846376f5101289042ba73))
+* **06-02:** add integration test workflow with multi-fixture orchestration ([5b332c8](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/5b332c892946216f07c1b7b479b8283db3a96c7f))
+* **06-03:** add cleanup workflow for orphaned K8s test resources ([3e53745](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/3e5374550778cec910abc4511ef0d4a359f7361c))
+* add bastion host for CI cluster validation via SSH ([26af986](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/26af9861e89ae704540d898ad181de98b2d1434f))
+* **ci:** add format, validate, and lint workflow ([a6256c0](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/a6256c03d83ecb7f6d9c96ec9d8cdb5f68aa4c93))
+* require explicit default_instance_type instead of hardcoded z4.large ([f205c47](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/f205c47ab547bf146c094aa2975188b40e0d6832))
+* scale to 3+1 topology with SSH key support ([d557299](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/d557299e62f3b338732e5615c6d7cd89551eeb7d))
+
+
+### Bug Fixes
+
+* **01-01:** use GITHUB_TOKEN with repository_dispatch for Release PR CI ([ee003e1](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/ee003e14202964f32fe1d04bf4a84868dd1a89d5))
+* add STS endpoint to VPC fixture and show Trivy findings in logs ([f3df6c8](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/f3df6c8709703c75ab3d59086de4a43373fa9110))
+* avoid zCompute volume tagging error in bastion fixture ([6c3c53a](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/6c3c53adbd4accfdfb12d4e0703e458bb997def0))
+* **ci:** broaden path filter to trigger CI on all workflow changes ([72f2cc5](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/72f2cc53c66ce842b936f1f01e489dd9836fd818))
+* **ci:** remove path filter from pull_request trigger ([f3b65ba](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/f3b65babb300ad6521e1ff54cb3cce4c96cc3d7d))
+* **ci:** resolve release-please JSON parsing issue ([44a210f](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/44a210f284f7a7ea4fd8fc7ded02c9d95147edc2))
+* enable NAT gateway for private subnet internet access ([bcc4478](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/bcc44786860c5c01f701d2af402876824253da47))
+* extract real K3s kubeconfig from control node ([c2d53cc](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/c2d53ccd7e53237c9f27b07ff2e8217952790dac))
+* pin bastion AWS provider to v3.35.0 for zCompute compatibility ([54fecf4](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/54fecf465002595cb9b17a0233a9f8878a78e756))
+* remove default_tags from all fixtures, refine Trivy rationale ([8e8cbba](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/8e8cbbaa713369b4026f5cdb999271f69bba9eaf))
+* remove tags from bastion SG and EIP for zCompute compatibility ([939c635](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/939c63502daf89f13e35b10f6f4879bd09e9020b))
+* resolve CI failures in quality gates, integration tests, and security scans ([51269ee](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/51269ee3360ae6ad31215f727de5f6f6fa2e614b))
+* suppress EBS encryption findings in Trivy ([dabe142](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/dabe1429db4dda4291a57f6d6da3b52091f7ff07))
+* suppress Trivy AVD-AWS-0107 for bastion SSH ingress ([17b69fc](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/17b69fcfe291f1c2d51590d4ed110899c64ec3b9))
+
+
+### Documentation
+
+* **01-02:** add CONTRIBUTING.md with Conventional Commits section ([909c83c](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/909c83c8cb77264289dd925681167e754f85e620))
+* **04-01:** add terraform-docs config and update README ([b7f98e7](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/b7f98e7160729479245e924d742add4f232d9cf0))
+
 ## [2.0.0](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v1.3.1...v2.0.0) (2025-09-16)
 
 ### ⚠ BREAKING CHANGES
