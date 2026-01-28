@@ -247,40 +247,73 @@ jobs:
             exit 1
           fi
 
-      - name: Generate kubeconfig
+      - name: Copy kubeconfig from control node
         id: kubeconfig
         if: steps.k8s.outcome == 'success'
-        working-directory: tests/fixtures/k8s
+        timeout-minutes: 15
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
         run: |
-          LB_DNS=$(terraform output -raw load_balancer_dns)
-          TOKEN="${{ steps.token.outputs.token }}"
           BASTION_IP="${{ steps.bastion.outputs.bastion_ip }}"
+          LB_DNS="${{ steps.k8s.outputs.load_balancer_dns }}"
+          SSH_KEY="/tmp/bastion_ssh_key"
+          EC2_ENDPOINT="${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/ec2"
+          PROXY_CMD="ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} -W %h:%p ubuntu@${BASTION_IP}"
 
-          cat > /tmp/kubeconfig.yaml << EOF
-          apiVersion: v1
-          kind: Config
-          clusters:
-          - cluster:
-              server: https://${LB_DNS}:6443
-              insecure-skip-tls-verify: true
-            name: test-cluster
-          contexts:
-          - context:
-              cluster: test-cluster
-              user: test-user
-            name: test-context
-          current-context: test-context
-          users:
-          - name: test-user
-            user:
-              token: ${TOKEN}
-          EOF
+          # Find the oldest running control plane node via zCompute EC2 API.
+          # The oldest node is the seed (cluster-init) node — most likely to
+          # have K3s fully bootstrapped and the kubeconfig ready.
+          echo "Looking for the oldest control plane node..."
+          CONTROL_IP=""
+          for i in $(seq 1 40); do
+            CONTROL_IP=$(aws ec2 describe-instances --no-verify-ssl \
+              --endpoint-url "${EC2_ENDPOINT}" \
+              --filters "Name=tag:run-id,Values=${{ github.run_id }}" \
+                        "Name=tag:zadara.com/k8s/role,Values=control" \
+                        "Name=instance-state-name,Values=running" \
+              --query 'sort_by(Reservations[].Instances[], &LaunchTime)[0].PrivateIpAddress' \
+              --output text 2>/dev/null || true)
 
-          # Copy kubeconfig to bastion
-          scp -o StrictHostKeyChecking=no -i /tmp/bastion_ssh_key \
+            if [ -n "$CONTROL_IP" ] && [ "$CONTROL_IP" != "None" ] && [ "$CONTROL_IP" != "null" ]; then
+              echo "Found oldest control plane node at ${CONTROL_IP}"
+              break
+            fi
+            echo "Attempt ${i}/40: no running control node found yet..."
+            sleep 15
+          done
+
+          if [ -z "$CONTROL_IP" ] || [ "$CONTROL_IP" = "None" ] || [ "$CONTROL_IP" = "null" ]; then
+            echo "::error::No control plane node found within 10 minutes"
+            exit 1
+          fi
+
+          # Wait for K3s to generate kubeconfig on the control node
+          echo "Waiting for K3s kubeconfig on ${CONTROL_IP}..."
+          for i in $(seq 1 40); do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+                   -o "ProxyCommand=${PROXY_CMD}" -i ${SSH_KEY} \
+                   "ubuntu@${CONTROL_IP}" \
+                   "sudo test -f /etc/rancher/k3s/k3s.yaml" 2>/dev/null; then
+              echo "K3s kubeconfig found"
+              break
+            fi
+            echo "Attempt ${i}/40: K3s not ready yet..."
+            sleep 15
+          done
+
+          # Extract kubeconfig and replace localhost with LB DNS
+          ssh -o StrictHostKeyChecking=no -o "ProxyCommand=${PROXY_CMD}" -i ${SSH_KEY} \
+            "ubuntu@${CONTROL_IP}" "sudo cat /etc/rancher/k3s/k3s.yaml" | \
+            sed "s|server: https://127.0.0.1:6443|server: https://${LB_DNS}:6443|" \
+            > /tmp/kubeconfig.yaml
+
+          # Copy to bastion
+          scp -o StrictHostKeyChecking=no -i ${SSH_KEY} \
             /tmp/kubeconfig.yaml "ubuntu@${BASTION_IP}:~/kubeconfig.yaml"
 
-          echo "::notice::kubeconfig copied to bastion at ${BASTION_IP}"
+          echo "::notice::Real K3s kubeconfig copied to bastion (via control node ${CONTROL_IP})"
 
       - name: Validate cluster health
         if: steps.kubeconfig.outcome == 'success'
