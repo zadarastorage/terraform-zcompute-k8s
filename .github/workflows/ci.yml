@@ -6,7 +6,7 @@ on:
     paths:
       - '**.tf'
       - '**.tfvars'
-      - '.github/workflows/ci.yml'
+      - '.github/workflows/*.yml'
       - '.tflint.hcl'
   push:
     branches: [main]
