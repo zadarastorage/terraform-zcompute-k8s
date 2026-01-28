@@ -25,4 +25,4 @@ jobs:
         uses: peter-evans/repository-dispatch@v3
         with:
           event-type: release-pr-ci
-          client-payload: '{"pr_number": "${{ steps.release.outputs.pr }}", "head_sha": "${{ steps.release.outputs.sha }}"}'
+          client-payload: '{"pr_number": "${{ fromJson(steps.release.outputs.pr).number }}", "head_sha": "${{ steps.release.outputs.sha }}"}'
