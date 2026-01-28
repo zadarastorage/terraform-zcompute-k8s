@@ -44,16 +44,12 @@ locals {
   }
 }
 
-# --- SSH Key ---
+# --- SSH Key Pair ---
 
-resource "tls_private_key" "bastion" {
-  algorithm = "RSA"
-  rsa_bits  = 4096
-}
-
-resource "aws_key_pair" "bastion" {
-  key_name   = local.bastion_name
-  public_key = tls_private_key.bastion.public_key_openssh
+resource "aws_key_pair" "ci" {
+  count      = var.ssh_public_key != "" ? 1 : 0
+  key_name   = "test-k8s-${var.run_id}-ci"
+  public_key = var.ssh_public_key
 }
 
 # --- AMI Lookup ---
@@ -97,37 +93,63 @@ resource "aws_security_group_rule" "bastion" {
 
 # --- Instance ---
 
+# --- Cloud-Init ---
+
+data "cloudinit_config" "bastion" {
+  gzip          = false
+  base64_encode = false
+
+  dynamic "part" {
+    for_each = var.debug_ssh_public_key != "" ? [1] : []
+    content {
+      filename     = "debug-ssh-key.yaml"
+      content_type = "text/cloud-config"
+      content      = <<-YAML
+        #cloud-config
+        ssh_authorized_keys:
+          - ${var.debug_ssh_public_key}
+      YAML
+    }
+  }
+
+  part {
+    filename     = "setup.sh"
+    content_type = "text/x-shellscript"
+    content      = <<-SHELL
+      #!/bin/bash
+      set -euo pipefail
+
+      # Install kubectl
+      curl -fsSL "https://dl.k8s.io/release/v1.31.2/bin/linux/amd64/kubectl" \
+        -o /usr/local/bin/kubectl
+      chmod +x /usr/local/bin/kubectl
+
+      # Signal readiness
+      touch /tmp/bastion-ready
+    SHELL
+  }
+}
+
 resource "aws_instance" "bastion" {
   instance_type = var.instance_type
   ami           = flatten(data.aws_ami_ids.bastion_ubuntu[*].ids)[0]
-  key_name      = aws_key_pair.bastion.key_name
+  key_name      = var.ssh_public_key != "" ? aws_key_pair.ci[0].key_name : null
 
   tags = { Name = local.bastion_name }
 
   subnet_id = one(var.public_subnets)
 
-  vpc_security_group_ids = [
+  vpc_security_group_ids = compact([
     aws_security_group.bastion.id,
     var.cluster_security_group_id,
-  ]
+  ])
 
   root_block_device {
     volume_size           = 32
     delete_on_termination = true
   }
 
-  user_data = <<-CLOUDINIT
-    #!/bin/bash
-    set -euo pipefail
-
-    # Install kubectl
-    curl -fsSL "https://dl.k8s.io/release/v1.31.2/bin/linux/amd64/kubectl" \
-      -o /usr/local/bin/kubectl
-    chmod +x /usr/local/bin/kubectl
-
-    # Signal readiness
-    touch /tmp/bastion-ready
-  CLOUDINIT
+  user_data = data.cloudinit_config.bastion.rendered
 
   lifecycle {
     ignore_changes = [

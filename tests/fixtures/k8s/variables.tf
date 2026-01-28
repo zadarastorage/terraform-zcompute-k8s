@@ -28,3 +28,15 @@ variable "default_instance_type" {
   type        = string
   description = "Default instance type for K8s node groups, provided by CI environment"
 }
+
+variable "ssh_key_name" {
+  type        = string
+  default     = ""
+  description = "AWS key pair name for SSH access to cluster nodes (created by bastion fixture)."
+}
+
+variable "debug_ssh_public_key" {
+  type        = string
+  default     = ""
+  description = "Optional SSH public key for manual debugging. Injected via cloud-init ssh_authorized_keys on all nodes."
+}

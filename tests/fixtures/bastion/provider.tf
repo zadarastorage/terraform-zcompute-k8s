@@ -30,5 +30,3 @@ provider "aws" {
   # resource type 'volume', which the provider sends when default_tags exist.
   # Tags are applied directly on each resource instead.
 }
-
-provider "tls" {}

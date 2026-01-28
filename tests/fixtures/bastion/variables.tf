@@ -15,10 +15,23 @@ variable "public_subnets" {
 
 variable "cluster_security_group_id" {
   type        = string
-  description = "Security group ID of the K8s cluster (allows bastion to reach the API server)"
+  default     = ""
+  description = "Security group ID of the K8s cluster (allows bastion to reach the API server). Empty on first apply; set on update after K8s deploys."
 }
 
 variable "instance_type" {
   type        = string
   description = "Instance type for the bastion host"
+}
+
+variable "ssh_public_key" {
+  type        = string
+  default     = ""
+  description = "SSH public key for bastion and cluster node access. When set, an AWS key pair is created."
+}
+
+variable "debug_ssh_public_key" {
+  type        = string
+  default     = ""
+  description = "Optional SSH public key for manual debugging. Injected via cloud-init ssh_authorized_keys."
 }

@@ -89,6 +89,13 @@ jobs:
           echo "::add-mask::$TOKEN"
           echo "token=$TOKEN" >> $GITHUB_OUTPUT
 
+      - name: Generate SSH key
+        id: ssh_key
+        run: |
+          ssh-keygen -t rsa -b 4096 -f /tmp/bastion_ssh_key -N "" -q
+          chmod 600 /tmp/bastion_ssh_key
+          echo "ssh_public_key=$(cat /tmp/bastion_ssh_key.pub)" >> $GITHUB_OUTPUT
+
       # ============================================================
       # Phase 1: VPC
       # ============================================================
@@ -135,6 +142,33 @@ jobs:
           sleep 30
 
       # ============================================================
+      # Phase 2.5: Bastion (SSH jump host — launched early to boot
+      #            while K8s deploys; cluster SG added after K8s)
+      # ============================================================
+      - name: Bastion - Init
+        working-directory: tests/fixtures/bastion
+        run: terraform init -input=false
+
+      - name: Bastion - Apply
+        id: bastion
+        working-directory: tests/fixtures/bastion
+        env:
+          TF_VAR_vpc_id: ${{ steps.vpc.outputs.vpc_id }}
+          TF_VAR_public_subnets: ${{ steps.vpc.outputs.public_subnets }}
+          TF_VAR_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
+          TF_VAR_ssh_public_key: ${{ steps.ssh_key.outputs.ssh_public_key }}
+          TF_VAR_debug_ssh_public_key: ${{ vars.DEBUG_SSH_PUBLIC_KEY }}
+        run: |
+          echo "Deploying bastion host: test-k8s-${{ github.run_id }}-bastion"
+          terraform apply -auto-approve -input=false
+
+          # Capture outputs
+          echo "bastion_ip=$(terraform output -raw bastion_public_ip)" >> $GITHUB_OUTPUT
+          echo "ssh_key_name=$(terraform output -raw ssh_key_name)" >> $GITHUB_OUTPUT
+
+          echo "::notice::Bastion host deployed (cluster SG pending K8s deploy)"
+
+      # ============================================================
       # Phase 3: K8s
       # ============================================================
       - name: K8s - Init
@@ -150,6 +184,8 @@ jobs:
           TF_VAR_iam_instance_profile: ${{ steps.iam.outputs.instance_profile_name }}
           TF_VAR_cluster_token: ${{ steps.token.outputs.token }}
           TF_VAR_default_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
+          TF_VAR_ssh_key_name: ${{ steps.bastion.outputs.ssh_key_name }}
+          TF_VAR_debug_ssh_public_key: ${{ vars.DEBUG_SSH_PUBLIC_KEY }}
         run: |
           echo "Deploying K8s cluster: test-k8s-${{ github.run_id }}"
 
@@ -168,37 +204,25 @@ jobs:
           echo "::notice::K8s cluster deployed successfully"
 
       # ============================================================
-      # Phase 3.5: Bastion (SSH jump host for private API access)
+      # Phase 3.5: Connect bastion to cluster security group
       # ============================================================
-      - name: Bastion - Init
-        if: steps.k8s.outcome == 'success'
-        working-directory: tests/fixtures/bastion
-        run: terraform init -input=false
-
-      - name: Bastion - Apply
-        id: bastion
+      - name: Bastion - Connect to cluster
         if: steps.k8s.outcome == 'success'
         working-directory: tests/fixtures/bastion
         env:
           TF_VAR_vpc_id: ${{ steps.vpc.outputs.vpc_id }}
           TF_VAR_public_subnets: ${{ steps.vpc.outputs.public_subnets }}
-          TF_VAR_cluster_security_group_id: ${{ steps.k8s.outputs.cluster_security_group_id }}
           TF_VAR_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
+          TF_VAR_ssh_public_key: ${{ steps.ssh_key.outputs.ssh_public_key }}
+          TF_VAR_debug_ssh_public_key: ${{ vars.DEBUG_SSH_PUBLIC_KEY }}
+          TF_VAR_cluster_security_group_id: ${{ steps.k8s.outputs.cluster_security_group_id }}
         run: |
-          echo "Deploying bastion host: test-k8s-${{ github.run_id }}-bastion"
+          echo "Adding cluster security group to bastion instance"
           terraform apply -auto-approve -input=false
-
-          # Capture bastion IP
-          echo "bastion_ip=$(terraform output -raw bastion_public_ip)" >> $GITHUB_OUTPUT
-
-          # Save SSH private key (never echo it)
-          terraform output -raw ssh_private_key > /tmp/bastion_ssh_key
-          chmod 600 /tmp/bastion_ssh_key
-
-          echo "::notice::Bastion host deployed successfully"
+          echo "::notice::Bastion connected to cluster security group"
 
       - name: Wait for bastion SSH readiness
-        if: steps.bastion.outcome == 'success'
+        if: steps.k8s.outcome == 'success'
         timeout-minutes: 10
         run: |
           BASTION_IP="${{ steps.bastion.outputs.bastion_ip }}"
@@ -225,7 +249,7 @@ jobs:
 
       - name: Generate kubeconfig
         id: kubeconfig
-        if: steps.bastion.outcome == 'success'
+        if: steps.k8s.outcome == 'success'
         working-directory: tests/fixtures/k8s
         run: |
           LB_DNS=$(terraform output -raw load_balancer_dns)
@@ -345,6 +369,8 @@ jobs:
           TF_VAR_public_subnets: ${{ steps.vpc.outputs.public_subnets }}
           TF_VAR_cluster_security_group_id: ${{ steps.k8s.outputs.cluster_security_group_id }}
           TF_VAR_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
+          TF_VAR_ssh_public_key: ${{ steps.ssh_key.outputs.ssh_public_key }}
+          TF_VAR_debug_ssh_public_key: ${{ vars.DEBUG_SSH_PUBLIC_KEY }}
         run: |
           echo "Destroying bastion host: test-k8s-${{ github.run_id }}-bastion"
           terraform destroy -auto-approve -input=false || {
@@ -353,7 +379,7 @@ jobs:
 
       - name: Cleanup SSH key
         if: always()
-        run: rm -f /tmp/bastion_ssh_key /tmp/kubeconfig.yaml
+        run: rm -f /tmp/bastion_ssh_key /tmp/bastion_ssh_key.pub /tmp/kubeconfig.yaml
 
       - name: K8s - Destroy
         if: always() && steps.k8s.outcome == 'success' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_destroy != 'true')
@@ -364,6 +390,8 @@ jobs:
           TF_VAR_iam_instance_profile: ${{ steps.iam.outputs.instance_profile_name }}
           TF_VAR_cluster_token: ${{ steps.token.outputs.token }}
           TF_VAR_default_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
+          TF_VAR_ssh_key_name: ${{ steps.bastion.outputs.ssh_key_name }}
+          TF_VAR_debug_ssh_public_key: ${{ vars.DEBUG_SSH_PUBLIC_KEY }}
         run: |
           echo "Destroying K8s cluster: test-k8s-${{ github.run_id }}"
           terraform destroy -auto-approve -input=false || {

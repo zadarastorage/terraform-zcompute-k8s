@@ -23,6 +23,7 @@ module "k8s" {
     cluster_flavor       = "k3s-ubuntu"
     root_volume_size     = 64
     iam_instance_profile = var.iam_instance_profile
+    key_name             = var.ssh_key_name != "" ? var.ssh_key_name : null
     security_group_rules = {
       egress_ipv4 = {
         description = "Allow all outbound ipv4 traffic"
@@ -33,12 +34,26 @@ module "k8s" {
         cidr_blocks = ["0.0.0.0/0"]
       }
     }
+    cloudinit_config = var.debug_ssh_public_key != "" ? [
+      {
+        order        = 99
+        filename     = "debug-ssh-key.yaml"
+        content_type = "text/cloud-config"
+        content      = "#cloud-config\nssh_authorized_keys:\n  - ${var.debug_ssh_public_key}"
+      }
+    ] : []
   }
 
-  # Minimal cluster for testing - single control plane node
+  # HA control plane (3 nodes) + 1 worker
   node_groups = {
     control = {
       role         = "control"
+      min_size     = 3
+      max_size     = 3
+      desired_size = 3
+    }
+    worker = {
+      role         = "worker"
       min_size     = 1
       max_size     = 1
       desired_size = 1
