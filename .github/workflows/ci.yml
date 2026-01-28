@@ -3,11 +3,6 @@ name: CI
 on:
   pull_request:
     branches: [main]
-    paths:
-      - '**.tf'
-      - '**.tfvars'
-      - '.github/workflows/*.yml'
-      - '.tflint.hcl'
   push:
     branches: [main]
     paths:
