@@ -1,0 +1,34 @@
+variable "zcompute_endpoint_url" {
+  type        = string
+  description = "IP/DNS of zCompute Region API Endpoint. ex: https://compute-us-west-101.zadara.com"
+}
+
+variable "zcompute_access_key" {
+  type        = string
+  description = "Amazon style zCompute access key"
+}
+
+variable "zcompute_secret_key" {
+  type        = string
+  sensitive   = true
+  description = "Amazon style zCompute secret key"
+}
+
+provider "aws" {
+  endpoints {
+    ec2         = "${var.zcompute_endpoint_url}/api/v2/aws/ec2"
+    autoscaling = "${var.zcompute_endpoint_url}/api/v2/aws/autoscaling"
+    elb         = "${var.zcompute_endpoint_url}/api/v2/aws/elbv2"
+    iam         = "${var.zcompute_endpoint_url}/api/v2/aws/iam"
+    sts         = "${var.zcompute_endpoint_url}/api/v2/aws/sts"
+  }
+
+  region   = "us-east-1"
+  insecure = "true"
+
+  access_key = var.zcompute_access_key
+  secret_key = var.zcompute_secret_key
+
+  # No default_tags — not reliably supported by zCompute's AWS-compatible API.
+  # Tags are passed via module variables instead (see main.tf tags block).
+}

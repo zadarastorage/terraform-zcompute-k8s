@@ -1,40 +1,28 @@
 name: Release
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - main
-    paths:
-      - '**/*.sh'
-      - '**/*.tf'
-      - '**/*.tpl'
-      - '**/*.yaml'
-      - '.github/workflows/release.yml'
+    branches: [main]
 
 permissions:
   contents: write
-  repository-projects: read
+  pull-requests: write
 
 jobs:
-  release:
-    name: Release
+  release-please:
     runs-on: ubuntu-latest
     if: github.repository_owner == 'zadarastorage'
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: googleapis/release-please-action@v4
+        id: release
         with:
-          #persist-credentials: false
-          fetch-depth: 0
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
 
-      - name: Release
-        uses: cycjimmy/semantic-release-action@v4
+      # Trigger CI on Release PR (GITHUB_TOKEN PRs don't trigger workflows)
+      - name: Trigger CI for Release PR
+        if: steps.release.outputs.pr
+        uses: peter-evans/repository-dispatch@v3
         with:
-          semantic_version: 24.2.7
-          extra_plugins: |
-            @semantic-release/changelog@6.0.3
-            @semantic-release/git@10.0.1
-            conventional-changelog-conventionalcommits@9.1.0
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+          event-type: release-pr-ci
+          client-payload: '{"pr_number": "${{ fromJson(steps.release.outputs.pr).number }}", "head_sha": "${{ steps.release.outputs.sha }}"}'

@@ -71,6 +71,19 @@ variable "node_groups" {
   default     = {}
 }
 
+variable "default_instance_type" {
+  description = <<-EOT
+    Default EC2 instance type for all node groups. Individual node groups can
+    override this in their configuration.
+
+    Available instance type families vary by zCompute site hardware configuration.
+    Common families include z4 (e.g. z4.large) and zp4 (e.g. zp4.large). Consult
+    your zCompute site documentation or administrator to determine which instance
+    types are supported at your target site.
+  EOT
+  type        = string
+}
+
 variable "etcd_backup" {
   description = "Configuration to automatically backup etcd to object storage"
   type        = map(string)

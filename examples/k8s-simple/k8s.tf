@@ -9,17 +9,39 @@ variable "k8s_version" {
   default     = "1.31.2"
 }
 
+variable "cluster_token" {
+  type        = string
+  description = "Configure the node join token"
+}
+
+variable "default_instance_type" {
+  description = <<-EOT
+    Default instance type for K8s node groups.
+
+    Available instance type families vary by zCompute site hardware configuration.
+    Common families include z4 (e.g. z4.large) and zp4 (e.g. zp4.large). Consult
+    your zCompute site documentation or administrator to determine which instance
+    types are supported at your target site.
+  EOT
+  type        = string
+}
+
 module "k8s" {
-  source = "github.com/zadarastorage/terraform-zcompute-k8s?ref=main"
-  # It's recommended to change `main` to a specific release version to prevent unexpected changes
+  source = "../.."
+  # For standalone use, replace with:
+  #   source = "github.com/zadarastorage/terraform-zcompute-k8s?ref=v2.0.0"
 
   vpc_id  = var.vpc_id
   subnets = var.private_subnets
+
+  cluster_token = var.cluster_token
 
   tags = var.tags
 
   cluster_name    = var.k8s_name
   cluster_version = var.k8s_version
+
+  default_instance_type = var.default_instance_type
 
   node_group_defaults = {
     cluster_flavor       = "k3s-ubuntu"
