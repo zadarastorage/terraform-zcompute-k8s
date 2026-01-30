@@ -36,9 +36,75 @@ variable "cluster_flavor" {
 }
 
 variable "cluster_helm" {
-  description = "List of helmcharts to preload"
+  description = <<-EOT
+    Helm charts to deploy on control plane nodes. Each key is a chart name
+    (matching or extending module defaults), value is chart configuration.
+
+    Merge behavior (3-level merge):
+    - Level 1 (Chart): User charts merged with default charts (union of chart names)
+    - Level 2 (Property): Chart properties merged (namespace, version, config, etc.)
+    - Level 3 (Config): Config block keys merged via Terraform merge()
+
+    Key behaviors:
+    - User values win at leaf level when both user and default specify the same key
+    - Default values preserved when user only specifies partial overrides
+    - Config-level siblings are preserved (e.g., both controller and sidecars exist)
+    - Deeper nesting within config uses shallow merge (user replaces entire nested object)
+
+    Note: For deep nested overrides within config, you must provide the complete
+    subtree you want. Only the top-level config keys are merged; anything deeper
+    is replaced wholesale by user values.
+
+    Disabling charts:
+    - Set chart to null to completely remove it from deployment
+    - Set enabled = false to disable a default chart (keeps config for reference)
+
+    Example:
+      cluster_helm = {
+        # Override specific config keys - other config keys preserved
+        cluster-autoscaler = {
+          config = {
+            awsRegion = "eu-west-1"  # Adds/overrides awsRegion, keeps other config keys
+          }
+        }
+        # Disable a default chart
+        calico = {
+          enabled = false
+        }
+        # Remove a chart entirely
+        metrics-server = null
+        # Add custom chart (no defaults to merge with)
+        my-chart = {
+          repository_url = "https://example.com/charts"
+          chart          = "my-chart"
+          version        = "1.0.0"
+          namespace      = "default"
+          config         = {}
+        }
+      }
+  EOT
   type        = any
   default     = {}
+
+  validation {
+    # Validate that each chart value is either null (to disable) or an object
+    condition = alltrue([
+      for chart_name, chart_config in var.cluster_helm :
+      chart_config == null || can(keys(chart_config))
+    ])
+    error_message = <<-EOT
+      Invalid cluster_helm configuration: Each chart entry must be either null or an object.
+
+      Found invalid value. Check that each chart name maps to an object like:
+        chart_name = {
+          config = { ... }
+        }
+
+      Not a scalar value like:
+        chart_name = "string"  # Invalid
+        chart_name = 123       # Invalid
+    EOT
+  }
 }
 
 variable "pod_cidr" {
@@ -66,7 +132,43 @@ variable "node_group_defaults" {
 }
 
 variable "node_groups" {
-  description = "Configuration of scalable hosts with a designed configuration."
+  description = <<-EOT
+    Configuration of scalable hosts with a designed configuration.
+
+    Each node group can include a cloudinit_config list to add custom cloud-init
+    parts. These are APPENDED to module-generated parts (not merged/replaced).
+
+    Cloud-init concatenation behavior:
+    - Module generates base cloud-init parts (k3s install, config, etc.)
+    - User-provided cloudinit_config parts are appended to the list
+    - Parts are ordered by the 'order' key (lower runs first)
+    - Module parts use orders 0, 10, 19, 20, 30 - use values around these to
+      interleave your parts
+
+    Example:
+      node_groups = {
+        worker = {
+          role         = "worker"
+          min_size     = 2
+          max_size     = 10
+          desired_size = 3
+          cloudinit_config = [
+            {
+              order        = 5   # Runs after order=0, before order=10
+              filename     = "pre-k3s-setup.sh"
+              content_type = "text/x-shellscript"
+              content      = "#!/bin/bash\necho 'Runs before k3s install'"
+            },
+            {
+              order        = 25  # Runs after k3s install (order=20)
+              filename     = "post-k3s-setup.sh"
+              content_type = "text/x-shellscript"
+              content      = "#!/bin/bash\necho 'Runs after k3s install'"
+            }
+          ]
+        }
+      }
+  EOT
   type        = any
   default     = {}
 }

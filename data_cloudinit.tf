@@ -54,7 +54,8 @@ data "cloudinit_config" "k8s" {
             node_taints     = try(each.value.k8s_taints, {})
           }) },
           { enabled = (try(each.value.role, "worker") == "control"), path = "/etc/zadara/k8s_helm.json", owner = "root:root", permissions = "0640",
-            content = jsonencode({ for k, v in merge(local.cluster_helm_default, var.cluster_helm) : k => merge(try(local.cluster_helm_default[k], {}), try(var.cluster_helm[k], {})) if v != null && try(v.enabled, true) == true })
+            # Use 3-level merge logic from locals_merge.tf - handles chart/property/config merge, null filtering
+            content = jsonencode(local.cluster_helm_merged)
           },
           { enabled = (try(each.value.role, "worker") == "control" && try(var.etcd_backup, null) != null), path = "/etc/zadara/etcd_backup.json", owner = "root:root", permissions = "0640",
             content = jsonencode(var.etcd_backup)
