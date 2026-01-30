@@ -1,0 +1,4 @@
+625def421a168990939fbe8df0ef3982dc4c303f716eb30692f20248b899782b  common/10-setup-os.sh
+bc582ab735a1566d9f2740e43b61b7159bd0eb7b7f7d72ba401607bac3bc8ca9  common/19-wait-for-instance-profile.sh
+70420502ef13310133bfb2a51a8efdc566612704882bc7e570074e93e32193e6  common/20-setup-k3s.sh
+7f25c61ea463c58bcc386069bc48755129b3d6b0affe2ecec72768e0057d7cba  control-plane/30-setup-helm.sh

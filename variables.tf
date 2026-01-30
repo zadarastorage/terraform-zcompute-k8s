@@ -4,6 +4,37 @@ variable "zcompute_endpoint" {
   default     = "https://cloud.zadara.com"
 }
 
+variable "module_version" {
+  description = <<-EOT
+    Module version tag for downloading bootstrap scripts from GitHub.
+    Must match a git tag in the terraform-zcompute-k8s repository.
+
+    Example: "v1.2.0"
+
+    The version is baked into the bootstrap loader at terraform plan time.
+    Scripts are downloaded from:
+    https://raw.githubusercontent.com/{github_org}/{github_repo}/{version}/scripts/
+  EOT
+  type        = string
+
+  validation {
+    condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+", var.module_version))
+    error_message = "module_version must be a semantic version starting with 'v' (e.g., v1.2.0)"
+  }
+}
+
+variable "github_org" {
+  description = "GitHub organization for bootstrap script downloads"
+  type        = string
+  default     = "zadarastorage"
+}
+
+variable "github_repo" {
+  description = "GitHub repository name for bootstrap script downloads"
+  type        = string
+  default     = "terraform-zcompute-k8s"
+}
+
 variable "vpc_id" {
   description = "zCompute VPC ID"
   type        = string

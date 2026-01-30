@@ -148,6 +148,64 @@ See the terraform-docs generated sections below for detailed requirements, provi
 | <a name="output_cluster_version"></a> [cluster\_version](#output\_cluster\_version) | n/a |
 <!-- END_TF_DOCS -->
 
+## Bootstrap Architecture
+
+This module uses a lightweight bootstrap loader to minimize user-data size while maintaining flexibility for script updates.
+
+### How It Works
+
+1. **Minimal User-Data**: The EC2 user-data contains only:
+   - Cluster configuration JSON files (written via cloud-init write_files)
+   - A small bootstrap loader script (~800 bytes)
+
+2. **Script Download**: On first boot, the bootstrap loader:
+   - Downloads scripts from GitHub matching `module_version`
+   - Verifies SHA256 checksums against `MANIFEST.sha256`
+   - Executes scripts in sorted order (common scripts first, then role-specific)
+
+3. **Role-Based Scripts**: Scripts are organized by role:
+   - `scripts/common/*` - Run on all nodes
+   - `scripts/control-plane/*` - Control plane nodes only
+   - `scripts/worker/*` - Worker nodes only
+
+### Configuration Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `module_version` | Git tag for script downloads (e.g., "v1.2.0") | Required |
+| `github_org` | GitHub organization | "zadarastorage" |
+| `github_repo` | GitHub repository | "terraform-zcompute-k8s" |
+
+### Failure Handling
+
+If bootstrap fails:
+- A marker file is written to `/var/log/bootstrap-failed`
+- Detailed logs are in `/var/log/bootstrap/*.log`
+- ASG health checks will eventually terminate the failed node
+- A new node will be launched and retry the bootstrap process
+
+### Updating Bootstrap Scripts
+
+When modifying scripts in `scripts/`:
+
+1. Make your changes to the script files
+2. Regenerate the manifest: `cd scripts && ./generate-manifest.sh`
+3. Commit both the script changes AND updated `MANIFEST.sha256`
+4. CI will verify the manifest matches the scripts
+5. Create a new git tag when ready for release
+6. Update `module_version` in your Terraform configuration
+
+The manifest is critical for bootstrap integrity - nodes verify checksums before executing downloaded scripts. CI automatically validates that:
+- The manifest is regenerated when scripts change
+- All script checksums match the manifest
+- Release tags include a valid manifest
+
+### Size Constraints
+
+- Bootstrap loader: <1KB
+- Target user-data: <4KB compressed (varies with Helm configuration)
+- If Helm config is extensive, consider using `cluster_helm_yaml` for file-based config
+
 ## Contributing
 
 Contributions are welcome! Please open an issue or pull request for any bugs, feature requests, or improvements.
