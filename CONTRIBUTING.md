@@ -54,6 +54,73 @@ Integration tests deploy actual infrastructure to zCompute to verify the module 
 
 Integration tests will skip gracefully if zCompute credentials are not configured.
 
+### Debugging Failed Tests
+
+When integration tests fail, you can manually trigger the workflow with debug options:
+
+1. Go to Actions > Integration Tests > Run workflow
+2. Enable debug options:
+   - **Skip destroy:** Keep all resources after test (useful for SSH debugging)
+   - **Keep resources on failure:** Only keep resources if test fails
+
+**Important:** Always clean up manually after debugging to avoid orphaned resources. Use the "Cleanup Test Resources" workflow or delete resources via zCompute console.
+
+Resources are named with the pattern `test-k8s-v{version}-{run_id}` for easy identification.
+
+### K8s Version Matrix
+
+Integration tests validate the module against multiple Kubernetes versions to ensure compatibility across the supported version range.
+
+**Currently Tested Versions:**
+
+| Version | Release Date | Support Status |
+|---------|--------------|----------------|
+| 1.35    | [Latest]     | Current        |
+| 1.34    | [Previous]   | Supported      |
+| 1.33    | [Previous]   | Supported      |
+| 1.32    | [Previous]   | LTS            |
+
+**Policy:** Always test the latest K8s minor version plus the 3 previous minor versions. This aligns with the Kubernetes version skew policy and ensures users on supported versions can upgrade safely.
+
+**Sequential Execution:** Tests run sequentially (`max-parallel: 1`) due to zCompute cluster-autoscaler collision risks. Each version deploys, validates, and destroys before the next version starts. This means the full test suite takes ~4x longer than a single-version test.
+
+**Failure Behavior:** The test matrix uses `fail-fast: false` to continue testing remaining versions even if one version fails. This collects failure data for all versions, helping identify version-specific issues.
+
+### Maintaining the Version Matrix
+
+The version matrix should be updated quarterly when new Kubernetes minor versions are released.
+
+**Quarterly Review Process:**
+
+1. **Check for new K8s releases** at the start of each quarter (January, April, July, October)
+2. **Update the matrix** in `.github/workflows/integration-test.yml`:
+   - Add the new version at the top of the list
+   - Remove the oldest version from the bottom
+   - Keep exactly 4 versions (latest + 3 previous)
+3. **Create a PR** with the version update
+   - Title: `chore: update K8s test matrix to X.Y`
+   - Run integration tests to validate all versions pass
+4. **Update this documentation** with the new version table
+
+**Example Update:**
+
+When K8s 1.36 releases:
+- Add `"1.36"` to the matrix
+- Remove `"1.32"` from the matrix
+- Update CONTRIBUTING.md table
+
+```yaml
+# Before
+matrix:
+  k8s_version: ["1.35", "1.34", "1.33", "1.32"]
+
+# After
+matrix:
+  k8s_version: ["1.36", "1.35", "1.34", "1.33"]
+```
+
+**Version Format:** Use minor version only (e.g., `1.35` not `1.35.0`). The K8s module accepts minor version and automatically selects the latest patch.
+
 ## Commit Message Format
 
 This project uses [Conventional Commits](https://www.conventionalcommits.org/) for automatic versioning and changelog generation. Every commit message must follow this format:

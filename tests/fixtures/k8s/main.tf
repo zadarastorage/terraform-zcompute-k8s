@@ -1,5 +1,7 @@
 locals {
-  cluster_name = "test-k8s-${var.run_id}"
+  # Format: v135 (strips dots, adds v prefix)
+  version_suffix = "v${replace(var.cluster_version, ".", "")}"
+  cluster_name   = "test-k8s-${local.version_suffix}-${var.run_id}"
 }
 
 module "k8s" {
@@ -9,7 +11,7 @@ module "k8s" {
   subnets = var.private_subnets
 
   cluster_name    = local.cluster_name
-  cluster_version = "1.31.2"
+  cluster_version = var.cluster_version
   cluster_token   = var.cluster_token
 
   default_instance_type = var.default_instance_type

@@ -3,6 +3,12 @@ variable "run_id" {
   description = "Unique identifier for this test run (e.g., github.run_id)"
 }
 
+variable "cluster_version" {
+  type        = string
+  description = "Kubernetes version to deploy (e.g., 1.35)"
+  # No default - must be provided by CI via TF_VAR_cluster_version
+}
+
 variable "vpc_id" {
   type        = string
   description = "VPC ID from VPC fixture output"
