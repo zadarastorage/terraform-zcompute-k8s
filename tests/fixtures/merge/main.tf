@@ -34,11 +34,13 @@ module "k8s" {
   cluster_name    = "merge-test"
   cluster_version = "1.31.2"
   cluster_token   = "mock-cluster-token"
+  module_version  = "v1.0.0"
 
   default_instance_type = "z4.large"
 
-  # Passthrough test variables for merge behavior testing
-  cluster_helm = var.test_cluster_helm
+  # YAML-based Helm configuration (replaces cluster_helm)
+  cluster_helm_yaml       = var.test_cluster_helm_yaml
+  cluster_helm_values_dir = var.test_cluster_helm_values_dir
 
   # Node groups with control plane for cloud-init testing
   node_groups = var.test_node_groups

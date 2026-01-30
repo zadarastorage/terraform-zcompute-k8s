@@ -62,10 +62,10 @@ run "helm_null_in_user_config" {
   command = plan
 
   variables {
-    test_cluster_helm = {
+    test_cluster_helm_yaml = <<-YAML
       # Disable flannel by setting to null
-      flannel = null
-    }
+      flannel: null
+      YAML
     test_node_groups = {
       control = {
         role         = "control"
@@ -95,11 +95,10 @@ run "helm_empty_config_override" {
   command = plan
 
   variables {
-    test_cluster_helm = {
-      cluster-autoscaler = {
-        config = {}
-      }
-    }
+    test_cluster_helm_yaml = <<-YAML
+      cluster-autoscaler:
+        config: {}
+      YAML
     test_node_groups = {
       control = {
         role         = "control"
@@ -128,11 +127,10 @@ run "helm_enabled_false" {
   command = plan
 
   variables {
-    test_cluster_helm = {
-      flannel = {
-        enabled = false
-      }
-    }
+    test_cluster_helm_yaml = <<-YAML
+      flannel:
+        enabled: false
+      YAML
     test_node_groups = {
       control = {
         role         = "control"
@@ -162,22 +160,21 @@ run "helm_add_new_chart_with_config" {
   command = plan
 
   variables {
-    test_cluster_helm = {
+    test_cluster_helm_yaml = <<-YAML
       # Add a completely new chart
-      custom-metrics-server = {
-        order           = 20
-        wait            = true
-        repository_name = "metrics-server"
-        repository_url  = "https://kubernetes-sigs.github.io/metrics-server/"
-        chart           = "metrics-server"
-        version         = "3.12.0"
-        namespace       = "kube-system"
-        config = {
-          replicas = 2
-          args     = ["--kubelet-insecure-tls"]
-        }
-      }
-    }
+      custom-metrics-server:
+        order: 20
+        wait: true
+        repository_name: metrics-server
+        repository_url: "https://kubernetes-sigs.github.io/metrics-server/"
+        chart: metrics-server
+        version: "3.12.0"
+        namespace: kube-system
+        config:
+          replicas: 2
+          args:
+            - "--kubelet-insecure-tls"
+      YAML
     test_node_groups = {
       control = {
         role         = "control"
@@ -222,7 +219,7 @@ run "helm_default_disabled_chart" {
   command = plan
 
   variables {
-    test_cluster_helm = {}
+    test_cluster_helm_yaml = null
     test_node_groups = {
       control = {
         role         = "control"
@@ -252,11 +249,10 @@ run "helm_enable_default_disabled_chart" {
   command = plan
 
   variables {
-    test_cluster_helm = {
-      calico = {
-        enabled = true
-      }
-    }
+    test_cluster_helm_yaml = <<-YAML
+      calico:
+        enabled: true
+      YAML
     test_node_groups = {
       control = {
         role         = "control"

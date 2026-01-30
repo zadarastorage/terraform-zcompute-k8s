@@ -63,13 +63,11 @@ run "helm_partial_override_preserves_defaults" {
   command = plan
 
   variables {
-    test_cluster_helm = {
-      flannel = {
-        config = {
-          podCidr = "10.0.0.0/8"
-        }
-      }
-    }
+    test_cluster_helm_yaml = <<-YAML
+      flannel:
+        config:
+          podCidr: "10.0.0.0/8"
+      YAML
     test_node_groups = {
       control = {
         role         = "control"
@@ -111,15 +109,12 @@ run "helm_nested_override_preserves_siblings" {
   command = plan
 
   variables {
-    test_cluster_helm = {
-      aws-ebs-csi-driver = {
-        config = {
-          controller = {
-            region = "us-west-2"
-          }
-        }
-      }
-    }
+    test_cluster_helm_yaml = <<-YAML
+      aws-ebs-csi-driver:
+        config:
+          controller:
+            region: "us-west-2"
+      YAML
     test_node_groups = {
       control = {
         role         = "control"
@@ -161,16 +156,14 @@ run "helm_multiple_level_override" {
   command = plan
 
   variables {
-    test_cluster_helm = {
-      cluster-autoscaler = {
+    test_cluster_helm_yaml = <<-YAML
+      cluster-autoscaler:
         # Chart-level override
-        namespace = "autoscaler-ns"
+        namespace: autoscaler-ns
         # Config-level override
-        config = {
-          awsRegion = "eu-west-1"
-        }
-      }
-    }
+        config:
+          awsRegion: "eu-west-1"
+      YAML
     test_node_groups = {
       control = {
         role         = "control"
@@ -209,5 +202,81 @@ run "helm_multiple_level_override" {
   assert {
     condition     = try(output.cluster_helm_merged["cluster-autoscaler"].config.nodeSelector, null) != null
     error_message = "REGRESSION: config.nodeSelector was lost during merge."
+  }
+}
+
+# Test Case 4: Inline YAML variable injection
+# Verify that ${cluster_name} and ${endpoint} are substituted in inline YAML
+run "helm_yaml_variable_injection" {
+  command = plan
+
+  variables {
+    test_cluster_helm_yaml = <<-YAML
+      test-chart:
+        enabled: true
+        namespace: testing
+        config:
+          cluster: "$${cluster_name}"
+          api: "$${endpoint}"
+      YAML
+  }
+
+  # Verify variable was injected (cluster_name = "merge-test" from main.tf)
+  assert {
+    condition     = output.cluster_helm_merged["test-chart"].config.cluster == "merge-test"
+    error_message = "Variable injection should substitute $${cluster_name} with actual value"
+  }
+}
+
+# Test Case 5: File-based YAML variable injection
+# Verify that variables are substituted when reading from cluster_helm_values_dir
+run "helm_file_yaml_variable_injection" {
+  command = plan
+
+  variables {
+    # Point to test-values directory containing injection-test.yaml
+    test_cluster_helm_values_dir = "./test-values"
+  }
+
+  # Verify variable was injected in file-based YAML
+  # Release name comes from filename: "injection-test"
+  # cluster_name = "merge-test" from main.tf
+  assert {
+    condition     = output.cluster_helm_merged["injection-test"].config.clusterName == "merge-test"
+    error_message = "File-based YAML should substitute $${cluster_name} with actual value"
+  }
+
+  assert {
+    condition     = output.cluster_helm_merged["injection-test"].namespace == "file-injection-test"
+    error_message = "File-based YAML should preserve non-variable values"
+  }
+}
+
+# Test Case 6: Multi-document YAML
+# Verify that multiple YAML documents separated by --- are parsed correctly
+run "helm_yaml_multi_document" {
+  command = plan
+
+  variables {
+    test_cluster_helm_yaml = <<-YAML
+      ---
+      chart-one:
+        enabled: true
+        namespace: ns-one
+      ---
+      chart-two:
+        enabled: true
+        namespace: ns-two
+      YAML
+  }
+
+  assert {
+    condition     = output.cluster_helm_merged["chart-one"].namespace == "ns-one"
+    error_message = "First document should define chart-one"
+  }
+
+  assert {
+    condition     = output.cluster_helm_merged["chart-two"].namespace == "ns-two"
+    error_message = "Second document should define chart-two"
   }
 }

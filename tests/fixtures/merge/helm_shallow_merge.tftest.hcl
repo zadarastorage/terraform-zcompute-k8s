@@ -1,7 +1,7 @@
 # Helm Shallow Merge Limitation Tests (MERGE-01)
 # Purpose: Document and demonstrate the shallow merge bug in Helm configuration
 #
-# These tests demonstrate that when users provide partial overrides to cluster_helm,
+# These tests demonstrate that when users provide partial overrides to cluster_helm_yaml,
 # the current two-level merge logic loses nested configuration keys.
 #
 # Expected behavior: Helm tests FAIL before fix, PASS after 08-02-PLAN fix
@@ -67,13 +67,11 @@ run "helm_override_loses_defaults" {
   command = plan
 
   variables {
-    test_cluster_helm = {
-      cluster-autoscaler = {
-        config = {
-          awsRegion = "eu-west-1"
-        }
-      }
-    }
+    test_cluster_helm_yaml = <<-YAML
+      cluster-autoscaler:
+        config:
+          awsRegion: "eu-west-1"
+      YAML
     test_node_groups = {
       control = {
         role         = "control"
@@ -112,15 +110,12 @@ run "helm_override_nested_config_replaced" {
   command = plan
 
   variables {
-    test_cluster_helm = {
-      aws-ebs-csi-driver = {
-        config = {
-          controller = {
-            region = "us-west-2"
-          }
-        }
-      }
-    }
+    test_cluster_helm_yaml = <<-YAML
+      aws-ebs-csi-driver:
+        config:
+          controller:
+            region: "us-west-2"
+      YAML
     test_node_groups = {
       control = {
         role         = "control"
@@ -158,22 +153,19 @@ run "helm_add_new_chart" {
   command = plan
 
   variables {
-    test_cluster_helm = {
-      custom-monitoring = {
-        order           = 20
-        wait            = true
-        repository_name = "prometheus-community"
-        repository_url  = "https://prometheus-community.github.io/helm-charts"
-        chart           = "kube-prometheus-stack"
-        version         = "45.0.0"
-        namespace       = "monitoring"
-        config = {
-          prometheus = {
-            enabled = true
-          }
-        }
-      }
-    }
+    test_cluster_helm_yaml = <<-YAML
+      custom-monitoring:
+        order: 20
+        wait: true
+        repository_name: prometheus-community
+        repository_url: "https://prometheus-community.github.io/helm-charts"
+        chart: kube-prometheus-stack
+        version: "45.0.0"
+        namespace: monitoring
+        config:
+          prometheus:
+            enabled: true
+      YAML
     test_node_groups = {
       control = {
         role         = "control"

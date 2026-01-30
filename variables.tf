@@ -66,78 +66,6 @@ variable "cluster_flavor" {
   default     = "k3s-ubuntu"
 }
 
-variable "cluster_helm" {
-  description = <<-EOT
-    Helm charts to deploy on control plane nodes. Each key is a chart name
-    (matching or extending module defaults), value is chart configuration.
-
-    Merge behavior (3-level merge):
-    - Level 1 (Chart): User charts merged with default charts (union of chart names)
-    - Level 2 (Property): Chart properties merged (namespace, version, config, etc.)
-    - Level 3 (Config): Config block keys merged via Terraform merge()
-
-    Key behaviors:
-    - User values win at leaf level when both user and default specify the same key
-    - Default values preserved when user only specifies partial overrides
-    - Config-level siblings are preserved (e.g., both controller and sidecars exist)
-    - Deeper nesting within config uses shallow merge (user replaces entire nested object)
-
-    Note: For deep nested overrides within config, you must provide the complete
-    subtree you want. Only the top-level config keys are merged; anything deeper
-    is replaced wholesale by user values.
-
-    Disabling charts:
-    - Set chart to null to completely remove it from deployment
-    - Set enabled = false to disable a default chart (keeps config for reference)
-
-    Example:
-      cluster_helm = {
-        # Override specific config keys - other config keys preserved
-        cluster-autoscaler = {
-          config = {
-            awsRegion = "eu-west-1"  # Adds/overrides awsRegion, keeps other config keys
-          }
-        }
-        # Disable a default chart
-        calico = {
-          enabled = false
-        }
-        # Remove a chart entirely
-        metrics-server = null
-        # Add custom chart (no defaults to merge with)
-        my-chart = {
-          repository_url = "https://example.com/charts"
-          chart          = "my-chart"
-          version        = "1.0.0"
-          namespace      = "default"
-          config         = {}
-        }
-      }
-  EOT
-  type        = any
-  default     = {}
-
-  validation {
-    # Validate that each chart value is either null (to disable) or an object
-    condition = alltrue([
-      for chart_name, chart_config in var.cluster_helm :
-      chart_config == null || can(keys(chart_config))
-    ])
-    error_message = <<-EOT
-      Invalid cluster_helm configuration: Each chart entry must be either null or an object.
-
-      Found invalid value. Check that each chart name maps to an object like:
-        chart_name = {
-          config = { ... }
-        }
-
-      Not a scalar value like:
-        chart_name = "string"  # Invalid
-        chart_name = 123       # Invalid
-    EOT
-  }
-}
-
 variable "pod_cidr" {
   description = "Customize the cidr range used for k8s pods"
   type        = string
@@ -224,4 +152,111 @@ variable "etcd_backup" {
   ## Configuration is essentially key=value where the key matches the k3s flag with --etcd- removed. IE --etcd-s3-bucket=bucket would be configured here as { s3-bucket = "bucket" }
   # { s3 = true, s3-endpoint = "", s3-region = "", s3-access-key = "", s3-secret-key = "", s3-bucket = "", s3-folder = "" } ## https://docs.k3s.io/cli/etcd-snapshot#s3-compatible-object-store-support
   # { s3 = true, s3-config-secret=<secretName> } ## Using a k8s secret is not available for restore operations https://docs.k3s.io/cli/etcd-snapshot#s3-configuration-secret-support
+}
+
+variable "cluster_helm_yaml" {
+  description = <<-EOT
+    Inline YAML configuration for Helm charts. Charts are configured using a
+    chart-centric structure with chart names at the top level.
+
+    YAML Structure:
+      <chart-name>:
+        enabled: true|false       # Optional, defaults to true
+        namespace: <namespace>    # Required
+        repository: <url>         # Repository URL
+        chart: <chart-name>       # Chart name in repository
+        version: "<version>"      # Chart version (quote to avoid YAML number parsing)
+        values:                   # Helm values passed to chart
+          <key>: <value>
+
+    Example:
+      grafana:
+        enabled: true
+        namespace: monitoring
+        repository: https://grafana.github.io/helm-charts
+        chart: grafana
+        version: "7.0.0"
+        values:
+          persistence:
+            enabled: true
+
+    Multi-Document Support:
+      Multiple charts can be defined in separate YAML documents using ---
+      separators. This allows modular organization of chart configurations.
+
+      ---
+      grafana:
+        namespace: monitoring
+        ...
+      ---
+      prometheus:
+        namespace: monitoring
+        ...
+
+    Variable Injection:
+      Use $${cluster_name}, $${endpoint}, $${pod_cidr}, $${service_cidr} to inject
+      module variables into your YAML configuration.
+
+      Example:
+        cluster-autoscaler:
+          values:
+            autoDiscovery:
+              clusterName: $${cluster_name}
+
+    Escape Mechanism:
+      To produce a literal $${} in output (e.g., for Helm templates that use
+      similar syntax), use $$${}{} which renders as $${}.
+
+    Merge Behavior:
+      When the same chart is defined in both cluster_helm_yaml and
+      cluster_helm_values_dir, the file-based configuration takes precedence.
+  EOT
+  type        = string
+  default     = null
+}
+
+variable "cluster_helm_values_dir" {
+  description = <<-EOT
+    Directory containing per-chart YAML configuration files. Each file configures
+    a single Helm chart, with the filename (without extension) becoming the
+    release name.
+
+    Directory Structure:
+      helm-values/
+        grafana.yaml        # Configures 'grafana' release
+        prometheus.yaml     # Configures 'prometheus' release
+        custom-app.yml      # Configures 'custom-app' release
+
+    File Format:
+      Each file should contain the chart configuration (NOT wrapped in chart name):
+
+      # grafana.yaml
+      enabled: true
+      namespace: monitoring
+      repository: https://grafana.github.io/helm-charts
+      chart: grafana
+      version: "7.0.0"
+      values:
+        persistence:
+          enabled: true
+
+    Supported Extensions:
+      Both .yaml and .yml extensions are recognized.
+
+    Directory Requirements:
+      - Directory must exist when this variable is set
+      - Only top-level files are processed (no subdirectory recursion)
+      - Empty files are treated as empty configuration (no error)
+
+    Merge Behavior:
+      File-based configurations take precedence over cluster_helm_yaml when
+      the same chart is defined in both.
+  EOT
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.cluster_helm_values_dir == null || can(regex("^[^*?\\[\\]]+$", var.cluster_helm_values_dir))
+    error_message = "cluster_helm_values_dir must be a plain directory path, not a glob pattern (cannot contain *, ?, [, or ])"
+  }
 }

@@ -61,16 +61,14 @@ run "helm_user_config_wins_at_leaf" {
   command = plan
 
   variables {
-    test_cluster_helm = {
-      cluster-autoscaler = {
-        config = {
+    test_cluster_helm_yaml = <<-YAML
+      cluster-autoscaler:
+        config:
           # Override the default awsRegion (us-east-1 -> eu-central-1)
-          awsRegion = "eu-central-1"
+          awsRegion: "eu-central-1"
           # Override the default cloudConfigPath
-          cloudConfigPath = "/custom/cloud.conf"
-        }
-      }
-    }
+          cloudConfigPath: "/custom/cloud.conf"
+      YAML
     test_node_groups = {
       control = {
         role         = "control"
@@ -111,14 +109,13 @@ run "helm_chart_level_override" {
   command = plan
 
   variables {
-    test_cluster_helm = {
-      flannel = {
+    test_cluster_helm_yaml = <<-YAML
+      flannel:
         # Override chart-level properties
-        order     = 99
-        namespace = "custom-flannel"
-        version   = "v0.99.0"
-      }
-    }
+        order: 99
+        namespace: custom-flannel
+        version: "v0.99.0"
+      YAML
     test_node_groups = {
       control = {
         role         = "control"
@@ -171,19 +168,16 @@ run "helm_config_first_level_merge" {
   command = plan
 
   variables {
-    test_cluster_helm = {
-      aws-ebs-csi-driver = {
-        config = {
+    test_cluster_helm_yaml = <<-YAML
+      aws-ebs-csi-driver:
+        config:
           # Override controller block entirely (replaces nested keys)
-          controller = {
-            region   = "ap-south-1"
-            logLevel = 5
-          }
+          controller:
+            region: "ap-south-1"
+            logLevel: 5
           # Add new config key
-          customKey = "customValue"
-        }
-      }
-    }
+          customKey: customValue
+      YAML
     test_node_groups = {
       control = {
         role         = "control"
@@ -224,31 +218,24 @@ run "helm_config_first_level_merge" {
 }
 
 # Test Case 4: Multiple charts overridden simultaneously
-# User can override multiple charts in single cluster_helm input
+# User can override multiple charts in single cluster_helm_yaml input
 run "helm_multiple_charts_override" {
   command = plan
 
   variables {
-    test_cluster_helm = {
-      flannel = {
-        config = {
-          podCidr = "10.200.0.0/16"
-        }
-      }
-      cluster-autoscaler = {
-        namespace = "scaling"
-        config = {
-          awsRegion = "eu-west-2"
-        }
-      }
-      aws-ebs-csi-driver = {
-        config = {
-          controller = {
-            region = "eu-west-2"
-          }
-        }
-      }
-    }
+    test_cluster_helm_yaml = <<-YAML
+      flannel:
+        config:
+          podCidr: "10.200.0.0/16"
+      cluster-autoscaler:
+        namespace: scaling
+        config:
+          awsRegion: "eu-west-2"
+      aws-ebs-csi-driver:
+        config:
+          controller:
+            region: "eu-west-2"
+      YAML
     test_node_groups = {
       control = {
         role         = "control"

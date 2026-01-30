@@ -1,10 +1,16 @@
 # Merge Test Fixture Variables
 # Purpose: Allow override of module inputs for merge behavior testing
 
-variable "test_cluster_helm" {
-  description = "Override cluster_helm to test Helm merge behavior"
-  type        = any
-  default     = {}
+variable "test_cluster_helm_yaml" {
+  description = "Override cluster_helm_yaml to test YAML merge behavior"
+  type        = string
+  default     = null
+}
+
+variable "test_cluster_helm_values_dir" {
+  description = "Override cluster_helm_values_dir to test directory-based config"
+  type        = string
+  default     = null
 }
 
 variable "test_node_groups" {

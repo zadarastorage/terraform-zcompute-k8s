@@ -1,0 +1,10 @@
+# Test file for variable injection in directory-based YAML
+# This file tests that ${cluster_name} and ${endpoint} are substituted
+# when reading from cluster_helm_values_dir
+
+enabled: true
+namespace: file-injection-test
+config:
+  clusterName: "${cluster_name}"
+  apiEndpoint: "${endpoint}"
+  podNetwork: "${pod_cidr}"
