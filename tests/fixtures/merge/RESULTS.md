@@ -107,8 +107,8 @@ Unrelated to merge bug, validates cloud-init concatenation:
 
 ### What Was NOT Implemented
 - `_replace` sentinel key for explicit replacement
-  - Documented in design but not implemented due to Terraform type system limitations
-  - Users can achieve similar results by providing complete config blocks
+  - Considered during design but NOT implemented due to Terraform type system constraints
+  - This feature will not be added - users should provide complete config blocks for replacement behavior
 
 ## Regression Prevention
 
