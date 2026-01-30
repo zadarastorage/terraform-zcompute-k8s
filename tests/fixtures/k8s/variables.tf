@@ -40,3 +40,14 @@ variable "debug_ssh_public_key" {
   default     = ""
   description = "Optional SSH public key for manual debugging. Injected via cloud-init ssh_authorized_keys on all nodes."
 }
+
+variable "etcd_backup" {
+  description = "etcd backup configuration (optional, for backup testing)"
+  type        = map(string)
+  default     = null
+}
+
+variable "module_version" {
+  description = "Module version tag for bootstrap script downloads (e.g., v1.0.0)"
+  type        = string
+}

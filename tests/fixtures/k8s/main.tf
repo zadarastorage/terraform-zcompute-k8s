@@ -14,6 +14,9 @@ module "k8s" {
 
   default_instance_type = var.default_instance_type
 
+  etcd_backup    = var.etcd_backup
+  module_version = var.module_version
+
   tags = {
     "managed-by" = "integration-test"
     "run-id"     = var.run_id
