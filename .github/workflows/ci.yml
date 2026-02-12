@@ -33,7 +33,7 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.5.7"
+          terraform_version: "1.14.0"
 
       - name: Check formatting
         id: fmt
@@ -67,7 +67,7 @@ jobs:
       fail-fast: false
       matrix:
         terraform_version:
-          - "1.5.7"
+          - "1.14.0"
           - "latest"
         target:
           - path: "."
@@ -125,7 +125,7 @@ jobs:
       fail-fast: false
       matrix:
         terraform_version:
-          - "1.5.7"
+          - "1.14.0"
           - "latest"
         target:
           - path: "."
@@ -208,7 +208,7 @@ jobs:
       fail-fast: false
       matrix:
         terraform_version:
-          - "1.7.0"
+          - "1.14.0"
           - "latest"
     steps:
       - name: Checkout

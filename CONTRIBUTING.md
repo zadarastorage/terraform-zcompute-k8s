@@ -6,7 +6,7 @@ Thank you for your interest in contributing to the terraform-zcompute-k8s module
 
 ### Prerequisites
 
-- Terraform >= 1.5.7
+- Terraform >= 1.7.0 (1.14+ recommended)
 - Git
 - Access to a zCompute environment (required for integration testing only)
 

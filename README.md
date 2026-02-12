@@ -85,6 +85,7 @@ See the terraform-docs generated sections below for detailed requirements, provi
 
 | Name | Version |
 |------|---------|
+| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.7.0 |
 | <a name="requirement_aws"></a> [aws](#requirement\_aws) | >= 3.33.0, <= 3.35.0 |
 
 ## Providers
