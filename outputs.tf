@@ -31,7 +31,7 @@ output "cloudinit_parts_debug" {
         local.cloudinit_flavor[split("-", try(v.cluster_flavor, var.cluster_flavor))[0]],
         local.cloudinit_cfg[try(v.cluster_flavor, var.cluster_flavor)],
         try(v.cloudinit_config, [])
-      ) : {
+        ) : {
         order        = try(obj.order, 99)
         filename     = obj.filename
         content_type = obj.content_type
