@@ -1,0 +1,924 @@
+name: etcd Backup Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_destroy:
+        description: 'Skip destroy step (for debugging)'
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: '0 8 * * 3'  # Weekly Wednesday 8am UTC (after Monday integration tests)
+
+# Global concurrency - only ONE K8s test at a time
+concurrency:
+  group: k8s-integration-test-global
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  check-credentials:
+    name: Check Credentials
+    runs-on: ubuntu-latest
+    outputs:
+      has_credentials: ${{ steps.check.outputs.has_credentials }}
+    steps:
+      - name: Check for zCompute credentials
+        id: check
+        env:
+          ZCOMPUTE_ENDPOINT: ${{ secrets.ZCOMPUTE_ENDPOINT }}
+          ZCOMPUTE_ACCESS_KEY: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
+          ZCOMPUTE_SECRET_KEY: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
+        run: |
+          if [ -n "$ZCOMPUTE_ENDPOINT" ] && [ -n "$ZCOMPUTE_ACCESS_KEY" ] && [ -n "$ZCOMPUTE_SECRET_KEY" ]; then
+            echo "has_credentials=true" >> $GITHUB_OUTPUT
+            echo "All zCompute credentials are configured"
+          else
+            echo "has_credentials=false" >> $GITHUB_OUTPUT
+            echo "::warning::etcd backup tests skipped - zCompute credentials not configured. See CONTRIBUTING.md for setup instructions."
+
+            # Log which credentials are missing
+            [ -z "$ZCOMPUTE_ENDPOINT" ] && echo "::warning::Missing secret: ZCOMPUTE_ENDPOINT"
+            [ -z "$ZCOMPUTE_ACCESS_KEY" ] && echo "::warning::Missing secret: ZCOMPUTE_ACCESS_KEY"
+            [ -z "$ZCOMPUTE_SECRET_KEY" ] && echo "::warning::Missing secret: ZCOMPUTE_SECRET_KEY"
+          fi
+
+  backup-test:
+    name: etcd Backup/Restore Test
+    runs-on: ubuntu-latest
+    needs: check-credentials
+    if: needs.check-credentials.outputs.has_credentials == 'true'
+    timeout-minutes: 90
+
+    env:
+      TF_VAR_zcompute_endpoint_url: ${{ secrets.ZCOMPUTE_ENDPOINT }}
+      TF_VAR_zcompute_access_key: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
+      TF_VAR_zcompute_secret_key: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
+      TF_VAR_run_id: ${{ github.run_id }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.0"
+          terraform_wrapper: false
+
+      - name: Generate cluster token
+        id: token
+        run: |
+          TOKEN=$(openssl rand -hex 32)
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Generate SSH key
+        id: ssh_key
+        run: |
+          ssh-keygen -t rsa -b 4096 -f /tmp/bastion_ssh_key -N "" -q
+          chmod 600 /tmp/bastion_ssh_key
+          echo "ssh_public_key=$(cat /tmp/bastion_ssh_key.pub)" >> $GITHUB_OUTPUT
+
+      # ============================================================
+      # Phase 1: VPC
+      # ============================================================
+      - name: VPC - Init
+        working-directory: tests/fixtures/vpc
+        run: terraform init -input=false
+
+      - name: VPC - Apply
+        id: vpc
+        working-directory: tests/fixtures/vpc
+        run: |
+          echo "Deploying VPC: test-k8s-${{ github.run_id }}"
+          terraform apply -auto-approve -input=false
+
+          # Capture outputs for downstream fixtures
+          echo "vpc_id=$(terraform output -raw vpc_id)" >> $GITHUB_OUTPUT
+          echo "private_subnets=$(terraform output -json private_subnets)" >> $GITHUB_OUTPUT
+          echo "public_subnets=$(terraform output -json public_subnets)" >> $GITHUB_OUTPUT
+
+          echo "::notice::VPC deployed successfully"
+
+      # ============================================================
+      # Phase 2: IAM
+      # ============================================================
+      - name: IAM - Init
+        working-directory: tests/fixtures/iam
+        run: terraform init -input=false
+
+      - name: IAM - Apply
+        id: iam
+        working-directory: tests/fixtures/iam
+        run: |
+          echo "Deploying IAM: test-k8s-${{ github.run_id }}"
+          terraform apply -auto-approve -input=false
+
+          # Capture output for K8s fixture
+          echo "instance_profile_name=$(terraform output -raw instance_profile_name)" >> $GITHUB_OUTPUT
+
+          echo "::notice::IAM instance profile deployed successfully"
+
+      - name: Wait for IAM propagation
+        run: |
+          echo "Waiting 30 seconds for IAM eventual consistency..."
+          sleep 30
+
+      # ============================================================
+      # Phase 2.5: Bastion (SSH jump host)
+      # ============================================================
+      - name: Bastion - Init
+        working-directory: tests/fixtures/bastion
+        run: terraform init -input=false
+
+      - name: Bastion - Apply
+        id: bastion
+        working-directory: tests/fixtures/bastion
+        env:
+          TF_VAR_vpc_id: ${{ steps.vpc.outputs.vpc_id }}
+          TF_VAR_public_subnets: ${{ steps.vpc.outputs.public_subnets }}
+          TF_VAR_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
+          TF_VAR_ssh_public_key: ${{ steps.ssh_key.outputs.ssh_public_key }}
+          TF_VAR_debug_ssh_public_key: ${{ vars.DEBUG_SSH_PUBLIC_KEY }}
+        run: |
+          echo "Deploying bastion host: test-k8s-${{ github.run_id }}-bastion"
+          terraform apply -auto-approve -input=false
+
+          # Capture outputs
+          echo "bastion_ip=$(terraform output -raw bastion_public_ip)" >> $GITHUB_OUTPUT
+          echo "ssh_key_name=$(terraform output -raw ssh_key_name)" >> $GITHUB_OUTPUT
+
+          echo "::notice::Bastion host deployed (cluster SG pending K8s deploy)"
+
+      # ============================================================
+      # Phase 2.6: GarageHQ (S3-compatible storage)
+      # ============================================================
+      - name: GarageHQ - Init
+        working-directory: tests/fixtures/garage
+        run: terraform init -input=false
+
+      - name: GarageHQ - Apply
+        id: garage
+        working-directory: tests/fixtures/garage
+        env:
+          TF_VAR_vpc_id: ${{ steps.vpc.outputs.vpc_id }}
+          TF_VAR_private_subnets: ${{ steps.vpc.outputs.private_subnets }}
+          TF_VAR_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
+          TF_VAR_ssh_key_name: ${{ steps.bastion.outputs.ssh_key_name }}
+          TF_VAR_debug_ssh_public_key: ${{ vars.DEBUG_SSH_PUBLIC_KEY }}
+        run: |
+          echo "Deploying GarageHQ: test-k8s-${{ github.run_id }}-garage"
+          terraform apply -auto-approve -input=false
+
+          # Capture outputs
+          echo "garage_private_ip=$(terraform output -raw garage_private_ip)" >> $GITHUB_OUTPUT
+          echo "garage_endpoint=$(terraform output -raw garage_endpoint)" >> $GITHUB_OUTPUT
+          echo "garage_bucket=$(terraform output -raw garage_bucket)" >> $GITHUB_OUTPUT
+
+          echo "::notice::GarageHQ deployed successfully"
+
+      - name: GarageHQ - Wait for readiness
+        timeout-minutes: 10
+        run: |
+          BASTION_IP="${{ steps.bastion.outputs.bastion_ip }}"
+          GARAGE_IP="${{ steps.garage.outputs.garage_private_ip }}"
+          SSH_KEY="/tmp/bastion_ssh_key"
+
+          echo "Waiting for GarageHQ readiness at ${GARAGE_IP} via bastion ${BASTION_IP}"
+
+          RETRY=0
+          MAX_RETRY=40  # 40 * 15s = 10 min
+          while [ $RETRY -lt $MAX_RETRY ]; do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+                   -i ${SSH_KEY} \
+                   -o "ProxyCommand=ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} -W %h:%p ubuntu@${BASTION_IP}" \
+                   "ubuntu@${GARAGE_IP}" \
+                   "test -f /tmp/garage-ready" 2>/dev/null; then
+              echo "GarageHQ is ready"
+              break
+            fi
+            echo "Attempt $((RETRY + 1))/$MAX_RETRY: GarageHQ not ready yet..."
+            RETRY=$((RETRY + 1))
+            sleep 15
+          done
+
+          if [ $RETRY -ge $MAX_RETRY ]; then
+            echo "::error::GarageHQ did not become ready within 10 minutes"
+            exit 1
+          fi
+
+      - name: GarageHQ - Extract credentials
+        id: garage_creds
+        run: |
+          GARAGE_IP="${{ steps.garage.outputs.garage_private_ip }}"
+          BASTION_IP="${{ steps.bastion.outputs.bastion_ip }}"
+          SSH_KEY="/tmp/bastion_ssh_key"
+
+          # SSH to GarageHQ via bastion to extract credentials
+          CREDS=$(ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} \
+            -o "ProxyCommand=ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} -W %h:%p ubuntu@${BASTION_IP}" \
+            ubuntu@${GARAGE_IP} "cat /tmp/garage-credentials.json")
+
+          # Parse and mask credentials
+          BUCKET=$(echo "${CREDS}" | jq -r '.bucket')
+          ACCESS_KEY=$(echo "${CREDS}" | jq -r '.access_key')
+          SECRET_KEY=$(echo "${CREDS}" | jq -r '.secret_key')
+
+          echo "::add-mask::${ACCESS_KEY}"
+          echo "::add-mask::${SECRET_KEY}"
+
+          echo "garage_bucket=${BUCKET}" >> $GITHUB_OUTPUT
+          echo "garage_access_key=${ACCESS_KEY}" >> $GITHUB_OUTPUT
+          echo "garage_secret_key=${SECRET_KEY}" >> $GITHUB_OUTPUT
+
+          echo "::notice::GarageHQ credentials extracted and masked"
+
+      # ============================================================
+      # Phase 3: K8s with etcd_backup configuration
+      # ============================================================
+      - name: K8s - Init
+        working-directory: tests/fixtures/k8s
+        run: terraform init -input=false
+
+      - name: K8s - Apply
+        id: k8s
+        working-directory: tests/fixtures/k8s
+        env:
+          TF_VAR_vpc_id: ${{ steps.vpc.outputs.vpc_id }}
+          TF_VAR_private_subnets: ${{ steps.vpc.outputs.private_subnets }}
+          TF_VAR_iam_instance_profile: ${{ steps.iam.outputs.instance_profile_name }}
+          TF_VAR_cluster_token: ${{ steps.token.outputs.token }}
+          TF_VAR_default_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
+          TF_VAR_ssh_key_name: ${{ steps.bastion.outputs.ssh_key_name }}
+          TF_VAR_debug_ssh_public_key: ${{ vars.DEBUG_SSH_PUBLIC_KEY }}
+          TF_VAR_module_version: ${{ github.ref_name }}
+          TF_VAR_etcd_backup: |
+            {
+              "s3": "true",
+              "s3-endpoint": "${{ steps.garage.outputs.garage_endpoint }}",
+              "s3-bucket": "${{ steps.garage_creds.outputs.garage_bucket }}",
+              "s3-access-key": "${{ steps.garage_creds.outputs.garage_access_key }}",
+              "s3-secret-key": "${{ steps.garage_creds.outputs.garage_secret_key }}",
+              "s3-region": "garage",
+              "s3-insecure": "true",
+              "autorestore": "true"
+            }
+        run: |
+          echo "Deploying K8s cluster with etcd backup: test-k8s-${{ github.run_id }}"
+
+          # Apply with one retry on failure
+          if ! terraform apply -auto-approve -input=false; then
+            echo "::warning::First apply failed, retrying in 30 seconds..."
+            sleep 30
+            terraform apply -auto-approve -input=false
+          fi
+
+          # Capture outputs
+          echo "cluster_name=$(terraform output -raw cluster_name)" >> $GITHUB_OUTPUT
+          echo "load_balancer_dns=$(terraform output -raw load_balancer_dns)" >> $GITHUB_OUTPUT
+          echo "cluster_security_group_id=$(terraform output -raw cluster_security_group_id)" >> $GITHUB_OUTPUT
+
+          echo "::notice::K8s cluster deployed with etcd backup configuration"
+
+      # ============================================================
+      # Phase 3.5: Connect bastion and GarageHQ to cluster security group
+      # ============================================================
+      - name: Bastion - Connect to cluster
+        if: steps.k8s.outcome == 'success'
+        working-directory: tests/fixtures/bastion
+        env:
+          TF_VAR_vpc_id: ${{ steps.vpc.outputs.vpc_id }}
+          TF_VAR_public_subnets: ${{ steps.vpc.outputs.public_subnets }}
+          TF_VAR_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
+          TF_VAR_ssh_public_key: ${{ steps.ssh_key.outputs.ssh_public_key }}
+          TF_VAR_debug_ssh_public_key: ${{ vars.DEBUG_SSH_PUBLIC_KEY }}
+          TF_VAR_cluster_security_group_id: ${{ steps.k8s.outputs.cluster_security_group_id }}
+        run: |
+          echo "Adding cluster security group to bastion instance"
+          terraform apply -auto-approve -input=false
+          echo "::notice::Bastion connected to cluster security group"
+
+      - name: GarageHQ - Connect to cluster
+        if: steps.k8s.outcome == 'success'
+        working-directory: tests/fixtures/garage
+        env:
+          TF_VAR_vpc_id: ${{ steps.vpc.outputs.vpc_id }}
+          TF_VAR_private_subnets: ${{ steps.vpc.outputs.private_subnets }}
+          TF_VAR_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
+          TF_VAR_ssh_key_name: ${{ steps.bastion.outputs.ssh_key_name }}
+          TF_VAR_debug_ssh_public_key: ${{ vars.DEBUG_SSH_PUBLIC_KEY }}
+          TF_VAR_cluster_security_group_id: ${{ steps.k8s.outputs.cluster_security_group_id }}
+        run: |
+          echo "Adding cluster security group to GarageHQ instance"
+          terraform apply -auto-approve -input=false
+          echo "::notice::GarageHQ connected to cluster security group"
+
+      - name: Wait for bastion SSH readiness
+        if: steps.k8s.outcome == 'success'
+        timeout-minutes: 10
+        run: |
+          BASTION_IP="${{ steps.bastion.outputs.bastion_ip }}"
+          echo "Waiting for bastion SSH at ${BASTION_IP} (timeout: 10 minutes)"
+
+          RETRY=0
+          MAX_RETRY=40  # 40 * 15s = 10 min
+          while [ $RETRY -lt $MAX_RETRY ]; do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+                   -i /tmp/bastion_ssh_key "ubuntu@${BASTION_IP}" \
+                   "test -f /tmp/bastion-ready" 2>/dev/null; then
+              echo "Bastion is ready"
+              break
+            fi
+            echo "Attempt $((RETRY + 1))/$MAX_RETRY: bastion not ready yet..."
+            RETRY=$((RETRY + 1))
+            sleep 15
+          done
+
+          if [ $RETRY -ge $MAX_RETRY ]; then
+            echo "::error::Bastion SSH did not become ready within 10 minutes"
+            exit 1
+          fi
+
+      # ============================================================
+      # Phase 4: Copy kubeconfig
+      # ============================================================
+      - name: Copy kubeconfig from control node
+        id: kubeconfig
+        if: steps.k8s.outcome == 'success'
+        timeout-minutes: 15
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          BASTION_IP="${{ steps.bastion.outputs.bastion_ip }}"
+          LB_DNS="${{ steps.k8s.outputs.load_balancer_dns }}"
+          SSH_KEY="/tmp/bastion_ssh_key"
+          EC2_ENDPOINT="${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/ec2"
+          PROXY_CMD="ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} -W %h:%p ubuntu@${BASTION_IP}"
+
+          # Find the oldest running control plane node
+          echo "Looking for the oldest control plane node..."
+          CONTROL_IP=""
+          for i in $(seq 1 40); do
+            CONTROL_IP=$(aws ec2 describe-instances --no-verify-ssl \
+              --endpoint-url "${EC2_ENDPOINT}" \
+              --filters "Name=tag:run-id,Values=${{ github.run_id }}" \
+                        "Name=tag:zadara.com/k8s/role,Values=control" \
+                        "Name=instance-state-name,Values=running" \
+              --query 'sort_by(Reservations[].Instances[], &LaunchTime)[0].PrivateIpAddress' \
+              --output text 2>/dev/null || true)
+
+            if [ -n "$CONTROL_IP" ] && [ "$CONTROL_IP" != "None" ] && [ "$CONTROL_IP" != "null" ]; then
+              echo "Found oldest control plane node at ${CONTROL_IP}"
+              break
+            fi
+            echo "Attempt ${i}/40: no running control node found yet..."
+            sleep 15
+          done
+
+          if [ -z "$CONTROL_IP" ] || [ "$CONTROL_IP" = "None" ] || [ "$CONTROL_IP" = "null" ]; then
+            echo "::error::No control plane node found within 10 minutes"
+            exit 1
+          fi
+
+          # Store control IP for backup test script
+          echo "control_ip=${CONTROL_IP}" >> $GITHUB_OUTPUT
+
+          # Wait for K3s to generate kubeconfig on the control node
+          echo "Waiting for K3s kubeconfig on ${CONTROL_IP}..."
+          for i in $(seq 1 40); do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+                   -o "ProxyCommand=${PROXY_CMD}" -i ${SSH_KEY} \
+                   "ubuntu@${CONTROL_IP}" \
+                   "sudo test -f /etc/rancher/k3s/k3s.yaml" 2>/dev/null; then
+              echo "K3s kubeconfig found"
+              break
+            fi
+            echo "Attempt ${i}/40: K3s not ready yet..."
+            sleep 15
+          done
+
+          # Extract kubeconfig and replace localhost with LB DNS
+          ssh -o StrictHostKeyChecking=no -o "ProxyCommand=${PROXY_CMD}" -i ${SSH_KEY} \
+            "ubuntu@${CONTROL_IP}" "sudo cat /etc/rancher/k3s/k3s.yaml" | \
+            sed "s|server: https://127.0.0.1:6443|server: https://${LB_DNS}:6443|" \
+            > /tmp/kubeconfig.yaml
+
+          # Copy to bastion
+          scp -o StrictHostKeyChecking=no -i ${SSH_KEY} \
+            /tmp/kubeconfig.yaml "ubuntu@${BASTION_IP}:~/kubeconfig.yaml"
+
+          echo "::notice::K3s kubeconfig copied to bastion (via control node ${CONTROL_IP})"
+
+      # ============================================================
+      # Phase 5: Validate cluster health
+      # ============================================================
+      - name: Validate cluster health
+        if: steps.kubeconfig.outcome == 'success'
+        timeout-minutes: 15
+        run: |
+          BASTION_IP="${{ steps.bastion.outputs.bastion_ip }}"
+          SSH_OPTS="-o StrictHostKeyChecking=no -i /tmp/bastion_ssh_key"
+
+          bastion_kubectl() {
+            ssh $SSH_OPTS "ubuntu@${BASTION_IP}" \
+              "KUBECONFIG=~/kubeconfig.yaml kubectl $*"
+          }
+
+          echo "Waiting for cluster to be healthy (timeout: 15 minutes)"
+
+          # Poll for at least 1 node Ready
+          RETRY=0
+          MAX_RETRY=60
+          READY_NODES=0
+
+          while [ $RETRY -lt $MAX_RETRY ]; do
+            NODES=$(bastion_kubectl get nodes --no-headers 2>/dev/null || true)
+            READY_NODES=$(echo "$NODES" | grep -c " Ready" || true)
+            TOTAL_NODES=$(echo "$NODES" | grep -c "." || true)
+
+            echo "Attempt $((RETRY + 1))/$MAX_RETRY: Nodes $READY_NODES/$TOTAL_NODES Ready"
+
+            if [ "$READY_NODES" -ge 1 ]; then
+              echo "At least one node is Ready"
+              break
+            fi
+
+            RETRY=$((RETRY + 1))
+            sleep 15
+          done
+
+          if [ "$READY_NODES" -lt 1 ]; then
+            echo "::error::No nodes became Ready within 15 minutes"
+            bastion_kubectl get nodes -o wide || true
+            bastion_kubectl describe nodes || true
+            exit 1
+          fi
+
+          echo "Checking for coredns pods..."
+
+          # Wait for coredns to be Running
+          if ! bastion_kubectl wait --for=condition=Ready pod -l k8s-app=kube-dns -n kube-system --timeout=300s; then
+            echo "::error::coredns pods not Ready within 5 minutes"
+            bastion_kubectl get pods -n kube-system -o wide || true
+            exit 1
+          fi
+
+          echo "Cluster is healthy!"
+
+      # ============================================================
+      # Phase 6: Run backup test
+      # ============================================================
+      - name: Run etcd backup test
+        id: backup_test
+        if: steps.kubeconfig.outcome == 'success'
+        timeout-minutes: 10
+        env:
+          BASTION_IP: ${{ steps.bastion.outputs.bastion_ip }}
+          CONTROL_IP: ${{ steps.kubeconfig.outputs.control_ip }}
+          GARAGE_IP: ${{ steps.garage.outputs.garage_private_ip }}
+          GARAGE_BUCKET: ${{ steps.garage_creds.outputs.garage_bucket }}
+          GARAGE_ACCESS_KEY: ${{ steps.garage_creds.outputs.garage_access_key }}
+          GARAGE_SECRET_KEY: ${{ steps.garage_creds.outputs.garage_secret_key }}
+          RUN_ID: ${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+          SSH_KEY: /tmp/bastion_ssh_key
+        run: |
+          echo "Running etcd backup test (mode: backup)"
+          bash tests/scripts/etcd-backup-test.sh backup
+
+          echo "::notice::Backup test completed - sentinel created and snapshot uploaded to S3"
+
+      # ============================================================
+      # Phase 7: Destroy K8s only (keep VPC, IAM, Bastion, GarageHQ)
+      # ============================================================
+      - name: K8s - Destroy for restore test
+        if: steps.backup_test.outcome == 'success' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_destroy != 'true')
+        working-directory: tests/fixtures/k8s
+        env:
+          TF_VAR_vpc_id: ${{ steps.vpc.outputs.vpc_id }}
+          TF_VAR_private_subnets: ${{ steps.vpc.outputs.private_subnets }}
+          TF_VAR_iam_instance_profile: ${{ steps.iam.outputs.instance_profile_name }}
+          TF_VAR_cluster_token: ${{ steps.token.outputs.token }}
+          TF_VAR_default_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
+          TF_VAR_ssh_key_name: ${{ steps.bastion.outputs.ssh_key_name }}
+          TF_VAR_debug_ssh_public_key: ${{ vars.DEBUG_SSH_PUBLIC_KEY }}
+          TF_VAR_module_version: ${{ github.ref_name }}
+          TF_VAR_etcd_backup: |
+            {
+              "s3": "true",
+              "s3-endpoint": "${{ steps.garage.outputs.garage_endpoint }}",
+              "s3-bucket": "${{ steps.garage_creds.outputs.garage_bucket }}",
+              "s3-access-key": "${{ steps.garage_creds.outputs.garage_access_key }}",
+              "s3-secret-key": "${{ steps.garage_creds.outputs.garage_secret_key }}",
+              "s3-region": "garage",
+              "s3-insecure": "true",
+              "autorestore": "true"
+            }
+        run: |
+          echo "Destroying K8s cluster for restore test: test-k8s-${{ github.run_id }}"
+          terraform destroy -auto-approve -input=false
+          echo "::notice::K8s cluster destroyed - ready for restore test"
+
+      # ============================================================
+      # Phase 8: Recreate K8s (triggers auto-restore)
+      # ============================================================
+      - name: K8s - Recreate with auto-restore
+        id: k8s_restore
+        if: steps.backup_test.outcome == 'success' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_destroy != 'true')
+        working-directory: tests/fixtures/k8s
+        env:
+          TF_VAR_vpc_id: ${{ steps.vpc.outputs.vpc_id }}
+          TF_VAR_private_subnets: ${{ steps.vpc.outputs.private_subnets }}
+          TF_VAR_iam_instance_profile: ${{ steps.iam.outputs.instance_profile_name }}
+          TF_VAR_cluster_token: ${{ steps.token.outputs.token }}
+          TF_VAR_default_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
+          TF_VAR_ssh_key_name: ${{ steps.bastion.outputs.ssh_key_name }}
+          TF_VAR_debug_ssh_public_key: ${{ vars.DEBUG_SSH_PUBLIC_KEY }}
+          TF_VAR_module_version: ${{ github.ref_name }}
+          TF_VAR_etcd_backup: |
+            {
+              "s3": "true",
+              "s3-endpoint": "${{ steps.garage.outputs.garage_endpoint }}",
+              "s3-bucket": "${{ steps.garage_creds.outputs.garage_bucket }}",
+              "s3-access-key": "${{ steps.garage_creds.outputs.garage_access_key }}",
+              "s3-secret-key": "${{ steps.garage_creds.outputs.garage_secret_key }}",
+              "s3-region": "garage",
+              "s3-insecure": "true",
+              "autorestore": "true"
+            }
+        run: |
+          echo "Recreating K8s cluster (auto-restore): test-k8s-${{ github.run_id }}"
+
+          # Apply with one retry on failure
+          if ! terraform apply -auto-approve -input=false; then
+            echo "::warning::First apply failed, retrying in 30 seconds..."
+            sleep 30
+            terraform apply -auto-approve -input=false
+          fi
+
+          # Capture outputs
+          echo "cluster_security_group_id=$(terraform output -raw cluster_security_group_id)" >> $GITHUB_OUTPUT
+
+          echo "::notice::K8s cluster recreated with auto-restore"
+
+      - name: Bastion - Reconnect to restored cluster
+        if: steps.k8s_restore.outcome == 'success'
+        working-directory: tests/fixtures/bastion
+        env:
+          TF_VAR_vpc_id: ${{ steps.vpc.outputs.vpc_id }}
+          TF_VAR_public_subnets: ${{ steps.vpc.outputs.public_subnets }}
+          TF_VAR_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
+          TF_VAR_ssh_public_key: ${{ steps.ssh_key.outputs.ssh_public_key }}
+          TF_VAR_debug_ssh_public_key: ${{ vars.DEBUG_SSH_PUBLIC_KEY }}
+          TF_VAR_cluster_security_group_id: ${{ steps.k8s_restore.outputs.cluster_security_group_id }}
+        run: |
+          echo "Reconnecting bastion to restored cluster security group"
+          terraform apply -auto-approve -input=false
+
+      - name: GarageHQ - Reconnect to restored cluster
+        if: steps.k8s_restore.outcome == 'success'
+        working-directory: tests/fixtures/garage
+        env:
+          TF_VAR_vpc_id: ${{ steps.vpc.outputs.vpc_id }}
+          TF_VAR_private_subnets: ${{ steps.vpc.outputs.private_subnets }}
+          TF_VAR_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
+          TF_VAR_ssh_key_name: ${{ steps.bastion.outputs.ssh_key_name }}
+          TF_VAR_debug_ssh_public_key: ${{ vars.DEBUG_SSH_PUBLIC_KEY }}
+          TF_VAR_cluster_security_group_id: ${{ steps.k8s_restore.outputs.cluster_security_group_id }}
+        run: |
+          echo "Reconnecting GarageHQ to restored cluster security group"
+          terraform apply -auto-approve -input=false
+
+      - name: Copy kubeconfig from restored cluster
+        id: kubeconfig_restore
+        if: steps.k8s_restore.outcome == 'success'
+        timeout-minutes: 15
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          BASTION_IP="${{ steps.bastion.outputs.bastion_ip }}"
+          LB_DNS="${{ steps.k8s.outputs.load_balancer_dns }}"
+          SSH_KEY="/tmp/bastion_ssh_key"
+          EC2_ENDPOINT="${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/ec2"
+          PROXY_CMD="ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} -W %h:%p ubuntu@${BASTION_IP}"
+
+          # Find the oldest running control plane node
+          echo "Looking for the oldest control plane node..."
+          CONTROL_IP=""
+          for i in $(seq 1 40); do
+            CONTROL_IP=$(aws ec2 describe-instances --no-verify-ssl \
+              --endpoint-url "${EC2_ENDPOINT}" \
+              --filters "Name=tag:run-id,Values=${{ github.run_id }}" \
+                        "Name=tag:zadara.com/k8s/role,Values=control" \
+                        "Name=instance-state-name,Values=running" \
+              --query 'sort_by(Reservations[].Instances[], &LaunchTime)[0].PrivateIpAddress' \
+              --output text 2>/dev/null || true)
+
+            if [ -n "$CONTROL_IP" ] && [ "$CONTROL_IP" != "None" ] && [ "$CONTROL_IP" != "null" ]; then
+              echo "Found oldest control plane node at ${CONTROL_IP}"
+              break
+            fi
+            echo "Attempt ${i}/40: no running control node found yet..."
+            sleep 15
+          done
+
+          if [ -z "$CONTROL_IP" ] || [ "$CONTROL_IP" = "None" ] || [ "$CONTROL_IP" = "null" ]; then
+            echo "::error::No control plane node found within 10 minutes"
+            exit 1
+          fi
+
+          # Store control IP for verify script
+          echo "control_ip=${CONTROL_IP}" >> $GITHUB_OUTPUT
+
+          # Wait for K3s to generate kubeconfig on the control node
+          echo "Waiting for K3s kubeconfig on ${CONTROL_IP}..."
+          for i in $(seq 1 40); do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+                   -o "ProxyCommand=${PROXY_CMD}" -i ${SSH_KEY} \
+                   "ubuntu@${CONTROL_IP}" \
+                   "sudo test -f /etc/rancher/k3s/k3s.yaml" 2>/dev/null; then
+              echo "K3s kubeconfig found"
+              break
+            fi
+            echo "Attempt ${i}/40: K3s not ready yet..."
+            sleep 15
+          done
+
+          # Extract kubeconfig and replace localhost with LB DNS
+          ssh -o StrictHostKeyChecking=no -o "ProxyCommand=${PROXY_CMD}" -i ${SSH_KEY} \
+            "ubuntu@${CONTROL_IP}" "sudo cat /etc/rancher/k3s/k3s.yaml" | \
+            sed "s|server: https://127.0.0.1:6443|server: https://${LB_DNS}:6443|" \
+            > /tmp/kubeconfig.yaml
+
+          # Copy to bastion (overwrite previous)
+          scp -o StrictHostKeyChecking=no -i ${SSH_KEY} \
+            /tmp/kubeconfig.yaml "ubuntu@${BASTION_IP}:~/kubeconfig.yaml"
+
+          echo "::notice::K3s kubeconfig copied to bastion from restored cluster"
+
+      - name: Validate restored cluster health
+        if: steps.kubeconfig_restore.outcome == 'success'
+        timeout-minutes: 15
+        run: |
+          BASTION_IP="${{ steps.bastion.outputs.bastion_ip }}"
+          SSH_OPTS="-o StrictHostKeyChecking=no -i /tmp/bastion_ssh_key"
+
+          bastion_kubectl() {
+            ssh $SSH_OPTS "ubuntu@${BASTION_IP}" \
+              "KUBECONFIG=~/kubeconfig.yaml kubectl $*"
+          }
+
+          echo "Waiting for restored cluster to be healthy"
+
+          # Poll for at least 1 node Ready
+          RETRY=0
+          MAX_RETRY=60
+          READY_NODES=0
+
+          while [ $RETRY -lt $MAX_RETRY ]; do
+            NODES=$(bastion_kubectl get nodes --no-headers 2>/dev/null || true)
+            READY_NODES=$(echo "$NODES" | grep -c " Ready" || true)
+
+            echo "Attempt $((RETRY + 1))/$MAX_RETRY: Nodes $READY_NODES Ready"
+
+            if [ "$READY_NODES" -ge 1 ]; then
+              echo "At least one node is Ready"
+              break
+            fi
+
+            RETRY=$((RETRY + 1))
+            sleep 15
+          done
+
+          if [ "$READY_NODES" -lt 1 ]; then
+            echo "::error::No nodes became Ready within 15 minutes"
+            exit 1
+          fi
+
+          # Wait for coredns
+          if ! bastion_kubectl wait --for=condition=Ready pod -l k8s-app=kube-dns -n kube-system --timeout=300s; then
+            echo "::error::coredns pods not Ready within 5 minutes"
+            exit 1
+          fi
+
+          echo "Restored cluster is healthy!"
+
+      # ============================================================
+      # Phase 9: Verify sentinel data persistence
+      # ============================================================
+      - name: Verify sentinel after restore
+        id: verify_sentinel
+        if: steps.kubeconfig_restore.outcome == 'success'
+        timeout-minutes: 5
+        env:
+          BASTION_IP: ${{ steps.bastion.outputs.bastion_ip }}
+          CONTROL_IP: ${{ steps.kubeconfig_restore.outputs.control_ip }}
+          GARAGE_IP: ${{ steps.garage.outputs.garage_private_ip }}
+          GARAGE_BUCKET: ${{ steps.garage_creds.outputs.garage_bucket }}
+          GARAGE_ACCESS_KEY: ${{ steps.garage_creds.outputs.garage_access_key }}
+          GARAGE_SECRET_KEY: ${{ steps.garage_creds.outputs.garage_secret_key }}
+          RUN_ID: ${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+          SSH_KEY: /tmp/bastion_ssh_key
+        run: |
+          echo "Verifying sentinel data after restore (mode: verify)"
+          bash tests/scripts/etcd-backup-test.sh verify
+
+          echo "::notice::Sentinel verification passed - etcd backup/restore cycle complete"
+
+      - name: Upload backup artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: etcd-backup-debug-${{ github.run_id }}
+          path: /tmp/etcd-backup-test-results.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # ============================================================
+      # Cleanup: Reverse order (Bastion -> K8s -> GarageHQ -> IAM -> VPC)
+      # ============================================================
+      - name: Bastion - Destroy
+        if: always() && steps.bastion.outcome == 'success' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_destroy != 'true')
+        working-directory: tests/fixtures/bastion
+        env:
+          TF_VAR_vpc_id: ${{ steps.vpc.outputs.vpc_id }}
+          TF_VAR_public_subnets: ${{ steps.vpc.outputs.public_subnets }}
+          TF_VAR_cluster_security_group_id: ${{ steps.k8s_restore.outputs.cluster_security_group_id || steps.k8s.outputs.cluster_security_group_id }}
+          TF_VAR_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
+          TF_VAR_ssh_public_key: ${{ steps.ssh_key.outputs.ssh_public_key }}
+          TF_VAR_debug_ssh_public_key: ${{ vars.DEBUG_SSH_PUBLIC_KEY }}
+        run: |
+          echo "Destroying bastion host: test-k8s-${{ github.run_id }}-bastion"
+          terraform destroy -auto-approve -input=false || {
+            echo "::warning::Bastion destroy failed, continuing with cleanup"
+          }
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f /tmp/bastion_ssh_key /tmp/bastion_ssh_key.pub /tmp/kubeconfig.yaml
+
+      - name: K8s - Destroy
+        if: always() && (steps.k8s.outcome == 'success' || steps.k8s_restore.outcome == 'success') && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_destroy != 'true')
+        working-directory: tests/fixtures/k8s
+        env:
+          TF_VAR_vpc_id: ${{ steps.vpc.outputs.vpc_id }}
+          TF_VAR_private_subnets: ${{ steps.vpc.outputs.private_subnets }}
+          TF_VAR_iam_instance_profile: ${{ steps.iam.outputs.instance_profile_name }}
+          TF_VAR_cluster_token: ${{ steps.token.outputs.token }}
+          TF_VAR_default_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
+          TF_VAR_ssh_key_name: ${{ steps.bastion.outputs.ssh_key_name }}
+          TF_VAR_debug_ssh_public_key: ${{ vars.DEBUG_SSH_PUBLIC_KEY }}
+          TF_VAR_module_version: ${{ github.ref_name }}
+          TF_VAR_etcd_backup: |
+            {
+              "s3": "true",
+              "s3-endpoint": "${{ steps.garage.outputs.garage_endpoint }}",
+              "s3-bucket": "${{ steps.garage_creds.outputs.garage_bucket }}",
+              "s3-access-key": "${{ steps.garage_creds.outputs.garage_access_key }}",
+              "s3-secret-key": "${{ steps.garage_creds.outputs.garage_secret_key }}",
+              "s3-region": "garage",
+              "s3-insecure": "true",
+              "autorestore": "true"
+            }
+        run: |
+          echo "Destroying K8s cluster: test-k8s-${{ github.run_id }}"
+          terraform destroy -auto-approve -input=false || {
+            echo "::warning::K8s destroy failed, continuing with cleanup"
+          }
+
+      - name: GarageHQ - Destroy
+        if: always() && steps.garage.outcome == 'success' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_destroy != 'true')
+        working-directory: tests/fixtures/garage
+        env:
+          TF_VAR_vpc_id: ${{ steps.vpc.outputs.vpc_id }}
+          TF_VAR_private_subnets: ${{ steps.vpc.outputs.private_subnets }}
+          TF_VAR_instance_type: ${{ vars.DEFAULT_INSTANCE_TYPE }}
+          TF_VAR_ssh_key_name: ${{ steps.bastion.outputs.ssh_key_name }}
+          TF_VAR_debug_ssh_public_key: ${{ vars.DEBUG_SSH_PUBLIC_KEY }}
+          TF_VAR_cluster_security_group_id: ${{ steps.k8s_restore.outputs.cluster_security_group_id || steps.k8s.outputs.cluster_security_group_id }}
+        run: |
+          echo "Destroying GarageHQ: test-k8s-${{ github.run_id }}-garage"
+          terraform destroy -auto-approve -input=false || {
+            echo "::warning::GarageHQ destroy failed, continuing with cleanup"
+          }
+
+      - name: IAM - Destroy
+        if: always() && steps.iam.outcome == 'success' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_destroy != 'true')
+        working-directory: tests/fixtures/iam
+        run: |
+          echo "Destroying IAM resources: test-k8s-${{ github.run_id }}"
+          terraform destroy -auto-approve -input=false || {
+            echo "::warning::IAM destroy failed, continuing with VPC cleanup"
+          }
+
+      - name: VPC - Destroy
+        if: always() && steps.vpc.outcome == 'success' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_destroy != 'true')
+        working-directory: tests/fixtures/vpc
+        run: |
+          echo "Destroying VPC: test-k8s-${{ github.run_id }}"
+          if ! terraform destroy -auto-approve -input=false; then
+            echo "::error::VPC destroy failed - manual cleanup may be required"
+            cat >> $GITHUB_STEP_SUMMARY << EOF
+          ### Manual Cleanup Required
+
+          **VPC destroy failed.** Please manually clean up:
+          - VPC Name: \`test-k8s-${{ github.run_id }}\`
+          - Run ID: \`${{ github.run_id }}\`
+
+          Check the zCompute console and delete resources with this name prefix.
+          EOF
+          fi
+
+  summary:
+    name: etcd Backup Test Summary
+    runs-on: ubuntu-latest
+    needs: [check-credentials, backup-test]
+    if: always()
+    steps:
+      - name: Aggregate results
+        id: aggregate
+        run: |
+          # Determine credential status
+          HAS_CREDS="${{ needs.check-credentials.outputs.has_credentials }}"
+
+          # Create summary
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ## etcd Backup/Restore Test Results
+
+          EOF
+
+          if [ "$HAS_CREDS" != "true" ]; then
+            cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ### Credentials Not Configured
+
+          etcd backup tests were skipped because zCompute credentials are not configured.
+
+          **To enable tests:**
+          1. Add repository secrets: `ZCOMPUTE_ENDPOINT`, `ZCOMPUTE_ACCESS_KEY`, `ZCOMPUTE_SECRET_KEY`
+          2. See [CONTRIBUTING.md](../CONTRIBUTING.md) for detailed setup instructions
+          EOF
+            echo "status=skipped" >> $GITHUB_OUTPUT
+          else
+            # Check test results
+            TEST_RESULT="${{ needs.backup-test.result }}"
+
+            if [ "$TEST_RESULT" = "success" ]; then
+              cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ### All Tests Passed
+
+          etcd backup/restore cycle successfully completed.
+
+          | Phase | Status |
+          |-------|--------|
+          | VPC | Created and destroyed |
+          | IAM Instance Profile | Created and destroyed |
+          | Bastion Host | Created and destroyed |
+          | GarageHQ Storage | Created and destroyed |
+          | K8s Cluster (initial) | Created, backed up, and destroyed |
+          | K8s Cluster (restored) | Created, verified, and destroyed |
+          | Sentinel Data | Verified after restore |
+
+          **Test flow:**
+          1. Deploy infrastructure (VPC, IAM, Bastion, GarageHQ)
+          2. Deploy K8s with etcd backup to GarageHQ
+          3. Create sentinel ConfigMap with run-id and commit-sha
+          4. Trigger manual etcd snapshot to S3
+          5. Destroy K8s cluster
+          6. Recreate K8s cluster (auto-restore from S3)
+          7. Verify sentinel ConfigMap exists with matching data
+          8. Cleanup all resources
+          EOF
+              echo "status=success" >> $GITHUB_OUTPUT
+            else
+              cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ### Tests Failed
+
+          etcd backup/restore test failed. Check individual job logs for details.
+
+          **Possible issues:**
+          - Infrastructure deployment failed
+          - GarageHQ setup failed
+          - etcd backup to S3 failed
+          - Cluster restore failed
+          - Sentinel verification failed
+          - Resource cleanup failed
+          EOF
+              echo "status=failed" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Fail if tests failed
+        if: steps.aggregate.outputs.status == 'failed'
+        run: |
+          echo "::error::etcd backup/restore tests failed"
+          exit 1

@@ -24,6 +24,8 @@ jobs:
   fmt:
     name: Format Check
     runs-on: ubuntu-latest
+    outputs:
+      latest_tf_version: ${{ steps.resolve-latest.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,7 +35,14 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.5.7"
+          terraform_version: "1.14.0"
+
+      - name: Resolve latest Terraform version
+        id: resolve-latest
+        run: |
+          LATEST=$(curl -sf https://checkpoint-api.hashicorp.com/v1/check/terraform | jq -r '.current_version')
+          echo "version=${LATEST}" >> $GITHUB_OUTPUT
+          echo "Latest Terraform version: ${LATEST}"
 
       - name: Check formatting
         id: fmt
@@ -67,7 +76,7 @@ jobs:
       fail-fast: false
       matrix:
         terraform_version:
-          - "1.5.7"
+          - "1.14.0"
           - "latest"
         target:
           - path: "."
@@ -125,7 +134,7 @@ jobs:
       fail-fast: false
       matrix:
         terraform_version:
-          - "1.5.7"
+          - "1.14.0"
           - "latest"
         target:
           - path: "."
@@ -198,10 +207,66 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  test-merge:
+    name: Merge Tests (TF ${{ matrix.terraform_version }})
+    runs-on: ubuntu-latest
+    needs: [validate]
+    continue-on-error: ${{ matrix.terraform_version == 'latest' }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        terraform_version:
+          - "1.14.0"
+          - "latest"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.client_payload.head_sha || '' }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ matrix.terraform_version }}
+
+      - name: Cache Terraform providers
+        uses: actions/cache@v4
+        with:
+          path: |
+            tests/fixtures/merge/.terraform
+            tests/fixtures/merge/.terraform.lock.hcl
+          key: ${{ runner.os }}-terraform-merge-${{ matrix.terraform_version }}-${{ hashFiles('tests/fixtures/merge/.terraform.lock.hcl') }}
+          restore-keys: |
+            ${{ runner.os }}-terraform-merge-${{ matrix.terraform_version }}-
+            ${{ runner.os }}-terraform-merge-
+
+      - name: Terraform Init
+        working-directory: tests/fixtures/merge
+        run: terraform init -backend=false -input=false
+
+      - name: Run Merge Tests
+        id: test
+        working-directory: tests/fixtures/merge
+        run: |
+          set +e
+          TEST_OUTPUT=$(terraform test -no-color 2>&1)
+          TEST_EXIT=$?
+          set -e
+
+          echo "$TEST_OUTPUT"
+
+          if [ $TEST_EXIT -ne 0 ]; then
+            echo "::error::Merge tests failed"
+            exit 1
+          fi
+
+          echo "All merge tests passed"
+
   summary:
     name: Quality Gates Summary
     runs-on: ubuntu-latest
-    needs: [fmt, validate, lint]
+    needs: [fmt, validate, lint, test-merge]
     if: always()
     steps:
       - name: Checkout
@@ -213,14 +278,18 @@ jobs:
         id: aggregate
         run: |
           # Create summary
-          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          LATEST_TF="${{ needs.fmt.outputs.latest_tf_version }}"
+          cat >> $GITHUB_STEP_SUMMARY << EOF
           ## Terraform Quality Gates Results
+
+          **Tested versions:** 1.14.0 (pinned), ${LATEST_TF:-unknown} (latest)
 
           | Job | Result |
           |-----|--------|
           | Format Check | ${{ needs.fmt.result }} |
           | Validate | ${{ needs.validate.result }} |
           | Lint | ${{ needs.lint.result }} |
+          | Merge Tests | ${{ needs.test-merge.result }} |
 
           ### Details
           EOF
@@ -249,6 +318,13 @@ jobs:
             echo "- **Lint**: All targets passed" >> $GITHUB_STEP_SUMMARY
           fi
 
+          if [[ "${{ needs.test-merge.result }}" != "success" ]]; then
+            echo "- **Merge Tests**: Failed (check matrix jobs for details)" >> $GITHUB_STEP_SUMMARY
+            FAILED=true
+          else
+            echo "- **Merge Tests**: All tests passed" >> $GITHUB_STEP_SUMMARY
+          fi
+
           if [ "$FAILED" = "true" ]; then
             echo "status=failed" >> $GITHUB_OUTPUT
           else
@@ -264,6 +340,8 @@ jobs:
             const status = '${{ steps.aggregate.outputs.status }}';
             const statusEmoji = status === 'success' ? '✅' : '❌';
 
+            const latestVersion = '${{ needs.fmt.outputs.latest_tf_version }}' || 'unknown';
+
             const body = `${marker}
             ## ${statusEmoji} Terraform Quality Gates
 
@@ -272,11 +350,14 @@ jobs:
             | Format | ${{ needs.fmt.result == 'success' && '✅ Pass' || '❌ Fail' }} |
             | Validate | ${{ needs.validate.result == 'success' && '✅ Pass' || '❌ Fail' }} |
             | Lint | ${{ needs.lint.result == 'success' && '✅ Pass' || '❌ Fail' }} |
+            | Merge Tests | ${{ needs.test-merge.result == 'success' && '✅ Pass' || '❌ Fail' }} |
 
             ${status === 'failed' ? '**Action required:** Please fix the issues above before merging.' : '**All checks passed!** This PR is ready for review.'}
 
             <details>
             <summary>Matrix Results</summary>
+
+            Tested versions: **1.14.0** (pinned), **${latestVersion}** (latest)
 
             View individual job results in the [Actions tab](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}).
 

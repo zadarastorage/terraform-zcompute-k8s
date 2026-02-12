@@ -1,3 +1,29 @@
+# Bootstrap loader configuration
+locals {
+  bootstrap_base_url = "https://raw.githubusercontent.com/${var.github_org}/${var.github_repo}/${var.module_version}/scripts"
+
+  # Role name mapping for script directories
+  # cloud-init cluster_role "control" -> script dir "control-plane"
+  # cloud-init cluster_role "worker" -> script dir "worker"
+  role_script_dir = {
+    control = "control-plane"
+    worker  = "worker"
+  }
+
+  # Rendered bootstrap loader for each node group
+  bootstrap_loader = {
+    for ng_key, ng in local.node_groups : ng_key => templatefile(
+      "${path.module}/files/bootstrap-loader.tftpl.sh",
+      {
+        module_version = var.module_version
+        cluster_role   = local.role_script_dir[try(ng.role, "worker")]
+        github_org     = var.github_org
+        github_repo    = var.github_repo
+      }
+    )
+  }
+}
+
 locals {
   tags = merge(
     var.tags,

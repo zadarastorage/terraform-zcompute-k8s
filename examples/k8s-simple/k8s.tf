@@ -26,6 +26,11 @@ variable "default_instance_type" {
   type        = string
 }
 
+variable "module_version" {
+  description = "Module version tag for downloading bootstrap scripts from GitHub"
+  type        = string
+}
+
 module "k8s" {
   source = "../.."
   # For standalone use, replace with:
@@ -34,7 +39,8 @@ module "k8s" {
   vpc_id  = var.vpc_id
   subnets = var.private_subnets
 
-  cluster_token = var.cluster_token
+  cluster_token  = var.cluster_token
+  module_version = var.module_version
 
   tags = var.tags
 

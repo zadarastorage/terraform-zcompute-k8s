@@ -1,0 +1,77 @@
+name: Bootstrap Manifest
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/**'
+  push:
+    paths:
+      - 'scripts/**'
+    branches:
+      - main
+      - master
+
+jobs:
+  verify-manifest:
+    name: Verify SHA256 Manifest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify manifest is current
+        working-directory: scripts
+        run: |
+          echo "=== Current MANIFEST.sha256 ==="
+          cat MANIFEST.sha256
+          echo ""
+
+          echo "=== Regenerating manifest ==="
+          cp MANIFEST.sha256 /tmp/old-manifest.sha256
+          ./generate-manifest.sh || {
+            echo "Manifest generation failed"
+            exit 1
+          }
+
+          echo ""
+          echo "=== Comparing manifests ==="
+          if ! diff -q /tmp/old-manifest.sha256 MANIFEST.sha256 > /dev/null 2>&1; then
+            echo "ERROR: MANIFEST.sha256 is out of date!"
+            echo ""
+            echo "Differences:"
+            diff /tmp/old-manifest.sha256 MANIFEST.sha256 || true
+            echo ""
+            echo "Please run: cd scripts && ./generate-manifest.sh"
+            echo "Then commit the updated MANIFEST.sha256"
+            exit 1
+          fi
+
+          echo "Manifest is current."
+
+      - name: Verify checksums
+        working-directory: scripts
+        run: |
+          echo "Verifying all scripts match their checksums..."
+          sha256sum -c MANIFEST.sha256
+          echo "All checksums verified."
+
+  # On release tags, double-check manifest is included and valid
+  release-check:
+    name: Release Manifest Check
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify manifest for release
+        working-directory: scripts
+        run: |
+          if [ ! -f MANIFEST.sha256 ]; then
+            echo "ERROR: MANIFEST.sha256 missing from release!"
+            exit 1
+          fi
+
+          echo "Verifying manifest checksums for release ${{ github.ref_name }}..."
+          sha256sum -c MANIFEST.sha256
+          echo "Release manifest verified."
