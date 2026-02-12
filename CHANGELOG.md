@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.0.0](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v2.1.0...v3.0.0) (2026-02-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* **11:** cluster_helm HCL variable removed, use cluster_helm_yaml instead
+
+### Features
+
+* **08:** implement merge behavior fix ([c5493e5](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/c5493e580dc6fcdda33c9c93324727d73b6d3ebb))
+* **09:** implement cloud-init optimization ([31db372](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/31db372c421a55b80299a14e2cd896ab8f404b14))
+* **10:** implement etcd backup testing infrastructure ([b4f0dba](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/b4f0dbaf9ccfe435633805eead074a28e289132f))
+* **11:** implement Helm YAML configuration ([1a22b4a](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/1a22b4a8fbc69b83eb4cc0958cbcf280d6d070b1))
+* **12:** implement multi-version K8s testing ([e099a17](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/e099a1715ff2486173f084af4da6d73ede3b697f))
+* **ci:** surface resolved latest Terraform version in PR comment ([f02671d](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/f02671d11742191c711e3ba37827a86a6f763b15))
+
+
+### Bug Fixes
+
+* add missing module_version variable to k8s-simple example ([02a7843](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/02a7843ac51c8dc45167e311b49cb26ad5dddee6))
+* **ci:** bump merge test TF to 1.7.0 and fix manifest comparison ([c00526d](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/c00526db77492bae3dba166199f3ab865d48d656))
+
+
+### Documentation
+
+* **13:** clarify _replace sentinel not implemented ([12d0b12](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/12d0b12e8a5b145c7d3e0a8d480a141b46a5ac71))
+* regenerate README with current inputs/outputs and add doc links ([5ba3b87](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/5ba3b8736ff0b30b5062b2d3a77076b938465044))
+* update terraform-docs generated content ([57c9025](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/57c902571e18505a952541af3be15787ff92458d))
+
 ## [2.1.0](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v2.0.0...v2.1.0) (2026-01-28)
 
 
