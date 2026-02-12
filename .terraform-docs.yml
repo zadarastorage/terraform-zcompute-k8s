@@ -10,23 +10,13 @@ sections:
   show: []
 
 content: |-
-  ## Requirements
-
   {{ .Requirements }}
-
-  ## Providers
 
   {{ .Providers }}
 
-  ## Resources
-
   {{ .Resources }}
 
-  ## Inputs
-
   {{ .Inputs }}
-
-  ## Outputs
 
   {{ .Outputs }}
 

@@ -30,6 +30,7 @@ module "k8s" {
   cluster_name    = "my-cluster"
   cluster_version = "v1.28.4+k3s1"
   cluster_token   = "my-secure-token"
+  module_version  = "v3.0.0"
 
   vpc_id  = module.vpc.vpc_id
   subnets = module.vpc.private_subnets
@@ -70,13 +71,16 @@ Complete working examples are available in the [examples](./examples) directory:
 
 - **[k8s-simple](./examples/k8s-simple)**: Basic K3s cluster deployment with VPC and bastion host
 
+## Documentation
+
+- **[Helm Chart Configuration (YAML)](./docs/helm-yaml-config.md)** - Configure Helm charts using inline YAML or directory-based files, with variable injection and deep merge support
+- **[etcd Backup & Restore](./docs/etcd-backup.md)** - Automated etcd snapshots to S3-compatible object storage with disaster recovery
+
 ## Requirements and Dependencies
 
 See the terraform-docs generated sections below for detailed requirements, providers, resources, inputs, and outputs.
 
 <!-- BEGIN_TF_DOCS -->
-## Requirements
-
 ## Requirements
 
 | Name | Version |
@@ -85,15 +89,11 @@ See the terraform-docs generated sections below for detailed requirements, provi
 
 ## Providers
 
-## Providers
-
 | Name | Version |
 |------|---------|
-| <a name="provider_aws"></a> [aws](#provider\_aws) | >= 3.33.0, <= 3.35.0 |
-| <a name="provider_cloudinit"></a> [cloudinit](#provider\_cloudinit) | n/a |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | 3.35.0 |
+| <a name="provider_cloudinit"></a> [cloudinit](#provider\_cloudinit) | 2.3.7 |
 | <a name="provider_terraform"></a> [terraform](#provider\_terraform) | n/a |
-
-## Resources
 
 ## Resources
 
@@ -118,18 +118,21 @@ See the terraform-docs generated sections below for detailed requirements, provi
 
 ## Inputs
 
-## Inputs
-
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
 | <a name="input_cluster_flavor"></a> [cluster\_flavor](#input\_cluster\_flavor) | Default flavor of k8s cluster to deploy | `string` | `"k3s-ubuntu"` | no |
-| <a name="input_cluster_helm"></a> [cluster\_helm](#input\_cluster\_helm) | List of helmcharts to preload | `any` | `{}` | no |
+| <a name="input_cluster_helm_values_dir"></a> [cluster\_helm\_values\_dir](#input\_cluster\_helm\_values\_dir) | Directory containing per-chart YAML configuration files. Each file configures<br>a single Helm chart, with the filename (without extension) becoming the<br>release name.<br><br>Directory Structure:<br>  helm-values/<br>    grafana.yaml        # Configures 'grafana' release<br>    prometheus.yaml     # Configures 'prometheus' release<br>    custom-app.yml      # Configures 'custom-app' release<br><br>File Format:<br>  Each file should contain the chart configuration (NOT wrapped in chart name):<br><br>  # grafana.yaml<br>  enabled: true<br>  namespace: monitoring<br>  repository: https://grafana.github.io/helm-charts<br>  chart: grafana<br>  version: "7.0.0"<br>  values:<br>    persistence:<br>      enabled: true<br><br>Supported Extensions:<br>  Both .yaml and .yml extensions are recognized.<br><br>Directory Requirements:<br>  - Directory must exist when this variable is set<br>  - Only top-level files are processed (no subdirectory recursion)<br>  - Empty files are treated as empty configuration (no error)<br><br>Merge Behavior:<br>  File-based configurations take precedence over cluster\_helm\_yaml when<br>  the same chart is defined in both. | `string` | `null` | no |
+| <a name="input_cluster_helm_yaml"></a> [cluster\_helm\_yaml](#input\_cluster\_helm\_yaml) | Inline YAML configuration for Helm charts. Charts are configured using a<br>chart-centric structure with chart names at the top level.<br><br>YAML Structure:<br>  <chart-name>:<br>    enabled: true\|false       # Optional, defaults to true<br>    namespace: <namespace>    # Required<br>    repository: <url>         # Repository URL<br>    chart: <chart-name>       # Chart name in repository<br>    version: "<version>"      # Chart version (quote to avoid YAML number parsing)<br>    values:                   # Helm values passed to chart<br>      <key>: <value><br><br>Example:<br>  grafana:<br>    enabled: true<br>    namespace: monitoring<br>    repository: https://grafana.github.io/helm-charts<br>    chart: grafana<br>    version: "7.0.0"<br>    values:<br>      persistence:<br>        enabled: true<br><br>Multi-Document Support:<br>  Multiple charts can be defined in separate YAML documents using ---<br>  separators. This allows modular organization of chart configurations.<br><br>  ---<br>  grafana:<br>    namespace: monitoring<br>    ...<br>  ---<br>  prometheus:<br>    namespace: monitoring<br>    ...<br><br>Variable Injection:<br>  Use ${cluster\_name}, ${endpoint}, ${pod\_cidr}, ${service\_cidr} to inject<br>  module variables into your YAML configuration.<br><br>  Example:<br>    cluster-autoscaler:<br>      values:<br>        autoDiscovery:<br>          clusterName: ${cluster\_name}<br><br>Escape Mechanism:<br>  To produce a literal ${} in output (e.g., for Helm templates that use<br>  similar syntax), use $${}{} which renders as ${}.<br><br>Merge Behavior:<br>  When the same chart is defined in both cluster\_helm\_yaml and<br>  cluster\_helm\_values\_dir, the file-based configuration takes precedence. | `string` | `null` | no |
 | <a name="input_cluster_name"></a> [cluster\_name](#input\_cluster\_name) | Name to be used to describe the k8s cluster | `string` | n/a | yes |
 | <a name="input_cluster_token"></a> [cluster\_token](#input\_cluster\_token) | Configure the node join token | `string` | n/a | yes |
 | <a name="input_cluster_version"></a> [cluster\_version](#input\_cluster\_version) | The k8s base version to use | `string` | n/a | yes |
+| <a name="input_default_instance_type"></a> [default\_instance\_type](#input\_default\_instance\_type) | Default EC2 instance type for all node groups. Individual node groups can<br>override this in their configuration.<br><br>Available instance type families vary by zCompute site hardware configuration.<br>Common families include z4 (e.g. z4.large) and zp4 (e.g. zp4.large). Consult<br>your zCompute site documentation or administrator to determine which instance<br>types are supported at your target site. | `string` | n/a | yes |
 | <a name="input_etcd_backup"></a> [etcd\_backup](#input\_etcd\_backup) | Configuration to automatically backup etcd to object storage | `map(string)` | `null` | no |
+| <a name="input_github_org"></a> [github\_org](#input\_github\_org) | GitHub organization for bootstrap script downloads | `string` | `"zadarastorage"` | no |
+| <a name="input_github_repo"></a> [github\_repo](#input\_github\_repo) | GitHub repository name for bootstrap script downloads | `string` | `"terraform-zcompute-k8s"` | no |
+| <a name="input_module_version"></a> [module\_version](#input\_module\_version) | Module version tag for downloading bootstrap scripts from GitHub.<br>Must match a git tag in the terraform-zcompute-k8s repository.<br><br>Example: "v1.2.0"<br><br>The version is baked into the bootstrap loader at terraform plan time.<br>Scripts are downloaded from:<br>https://raw.githubusercontent.com/{github_org}/{github_repo}/{version}/scripts/ | `string` | n/a | yes |
 | <a name="input_node_group_defaults"></a> [node\_group\_defaults](#input\_node\_group\_defaults) | User-configurable defaults for all node groups | `any` | `{}` | no |
-| <a name="input_node_groups"></a> [node\_groups](#input\_node\_groups) | Configuration of scalable hosts with a designed configuration. | `any` | `{}` | no |
+| <a name="input_node_groups"></a> [node\_groups](#input\_node\_groups) | Configuration of scalable hosts with a designed configuration.<br><br>Each node group can include a cloudinit\_config list to add custom cloud-init<br>parts. These are APPENDED to module-generated parts (not merged/replaced).<br><br>Cloud-init concatenation behavior:<br>- Module generates base cloud-init parts (k3s install, config, etc.)<br>- User-provided cloudinit\_config parts are appended to the list<br>- Parts are ordered by the 'order' key (lower runs first)<br>- Module parts use orders 0, 10, 19, 20, 30 - use values around these to<br>  interleave your parts<br><br>Example:<br>  node\_groups = {<br>    worker = {<br>      role         = "worker"<br>      min\_size     = 2<br>      max\_size     = 10<br>      desired\_size = 3<br>      cloudinit\_config = [<br>        {<br>          order        = 5   # Runs after order=0, before order=10<br>          filename     = "pre-k3s-setup.sh"<br>          content\_type = "text/x-shellscript"<br>          content      = "#!/bin/bash\necho 'Runs before k3s install'"<br>        },<br>        {<br>          order        = 25  # Runs after k3s install (order=20)<br>          filename     = "post-k3s-setup.sh"<br>          content\_type = "text/x-shellscript"<br>          content      = "#!/bin/bash\necho 'Runs after k3s install'"<br>        }<br>      ]<br>    }<br>  } | `any` | `{}` | no |
 | <a name="input_pod_cidr"></a> [pod\_cidr](#input\_pod\_cidr) | Customize the cidr range used for k8s pods | `string` | `"10.42.0.0/16"` | no |
 | <a name="input_service_cidr"></a> [service\_cidr](#input\_service\_cidr) | Customize the cidr range used for k8s service objects | `string` | `"10.43.0.0/16"` | no |
 | <a name="input_subnets"></a> [subnets](#input\_subnets) | A list of (preferably private) subnets to place the K8s cluster and workers into. | `list(string)` | n/a | yes |
@@ -139,10 +142,10 @@ See the terraform-docs generated sections below for detailed requirements, provi
 
 ## Outputs
 
-## Outputs
-
 | Name | Description |
 |------|-------------|
+| <a name="output_cloudinit_parts_debug"></a> [cloudinit\_parts\_debug](#output\_cloudinit\_parts\_debug) | Cloud-init parts structure for each node group. Used for testing/debugging cloud-init concatenation behavior - shows the parts that will be combined for each node group |
+| <a name="output_cluster_helm_merged"></a> [cluster\_helm\_merged](#output\_cluster\_helm\_merged) | Final merged Helm configuration after combining defaults with user overrides. Used for testing/debugging merge behavior. |
 | <a name="output_cluster_name"></a> [cluster\_name](#output\_cluster\_name) | n/a |
 | <a name="output_cluster_security_group_id"></a> [cluster\_security\_group\_id](#output\_cluster\_security\_group\_id) | ID of the cluster security group |
 | <a name="output_cluster_version"></a> [cluster\_version](#output\_cluster\_version) | n/a |
