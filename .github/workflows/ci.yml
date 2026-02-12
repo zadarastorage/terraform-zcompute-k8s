@@ -24,6 +24,8 @@ jobs:
   fmt:
     name: Format Check
     runs-on: ubuntu-latest
+    outputs:
+      latest_tf_version: ${{ steps.resolve-latest.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,6 +36,13 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.14.0"
+
+      - name: Resolve latest Terraform version
+        id: resolve-latest
+        run: |
+          LATEST=$(curl -sf https://checkpoint-api.hashicorp.com/v1/check/terraform | jq -r '.current_version')
+          echo "version=${LATEST}" >> $GITHUB_OUTPUT
+          echo "Latest Terraform version: ${LATEST}"
 
       - name: Check formatting
         id: fmt
@@ -269,8 +278,11 @@ jobs:
         id: aggregate
         run: |
           # Create summary
-          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          LATEST_TF="${{ needs.fmt.outputs.latest_tf_version }}"
+          cat >> $GITHUB_STEP_SUMMARY << EOF
           ## Terraform Quality Gates Results
+
+          **Tested versions:** 1.14.0 (pinned), ${LATEST_TF:-unknown} (latest)
 
           | Job | Result |
           |-----|--------|
@@ -328,6 +340,8 @@ jobs:
             const status = '${{ steps.aggregate.outputs.status }}';
             const statusEmoji = status === 'success' ? '✅' : '❌';
 
+            const latestVersion = '${{ needs.fmt.outputs.latest_tf_version }}' || 'unknown';
+
             const body = `${marker}
             ## ${statusEmoji} Terraform Quality Gates
 
@@ -342,6 +356,8 @@ jobs:
 
             <details>
             <summary>Matrix Results</summary>
+
+            Tested versions: **1.14.0** (pinned), **${latestVersion}** (latest)
 
             View individual job results in the [Actions tab](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}).
 
