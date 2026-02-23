@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.0.1](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v3.0.0...v3.0.1) (2026-02-23)
+
+
+### Bug Fixes
+
+* **cloud-init:** strip enabled key from write_files entries before ya… ([88390f3](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/88390f38b960671a8804a96217164b258dbf9982))
+* **cloud-init:** strip enabled key from write_files entries before yamlencode ([68baadc](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/68baadc6b62809a58300e550f8d7d90b58bab378))
+
 ## [3.0.0](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v2.1.0...v3.0.0) (2026-02-12)
 
 
