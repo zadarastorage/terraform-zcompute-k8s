@@ -111,7 +111,7 @@ while [[ "${SETUP_STATE}" == "join" ]] && ! curl -k --head -s -o /dev/null "http
 			PEER_LAUNCH=$(date -d $(echo "${ASG_PEER}" | jq -c -r '.LaunchTime') +%s)
 			PEER_STATE_CODE=$(echo "${ASG_PEER}" | jq -c -r '.State.Code')
 			PEER_IP=$(echo "${ASG_PEER}" | jq -c -r '.PrivateIpAddress')
-			[[ ${TEST_STATE_CODE} -ge 32 || -z "${PEER_IP}" || "${PEER_IP}" == "null" ]] && continue
+			[[ ${PEER_STATE_CODE} -ge 32 || -z "${PEER_IP}" || "${PEER_IP}" == "null" ]] && continue
 			[ ${OLDEST_LAUNCH} -gt ${PEER_LAUNCH} ] && OLDEST_LAUNCH=${PEER_LAUNCH} && OLDEST_NODE=${instance_id}
 		done
 		_log "Node '${OLDEST_NODE}' is seed node"
@@ -141,5 +141,7 @@ esac
 
 # Start k3s
 _log "Starting k3s"
-[ "${CLUSTER_ROLE}" == "control" ] && systemctl start k3s
-[ "${CLUSTER_ROLE}" == "worker" ] && systemctl start k3s-agent
+case ${CLUSTER_ROLE} in
+	"control") systemctl start k3s ;;
+	"worker") systemctl start k3s-agent ;;
+esac
