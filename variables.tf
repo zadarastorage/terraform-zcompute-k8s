@@ -18,8 +18,8 @@ variable "module_version" {
   type        = string
 
   validation {
-    condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+", var.module_version))
-    error_message = "module_version must be a semantic version starting with 'v' (e.g., v1.2.0)"
+    condition     = length(var.module_version) > 0
+    error_message = "module_version must not be empty"
   }
 }
 
