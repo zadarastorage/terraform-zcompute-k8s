@@ -217,6 +217,70 @@ jobs:
           TF_VAR_debug_ssh_public_key: ${{ vars.DEBUG_SSH_PUBLIC_KEY }}
           # Note: TF_VAR_cluster_version, TF_VAR_module_version, TF_VAR_run_id inherited from job-level env
 
+      - name: Validate ASG instances
+        id: asg_validation
+        if: steps.k8s.outcome == 'success'
+        timeout-minutes: 10
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          EC2_ENDPOINT="${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/ec2"
+          EXPECTED_CONTROL=3
+          EXPECTED_WORKER=1
+
+          echo "Waiting for ASG instances (${EXPECTED_CONTROL} control + ${EXPECTED_WORKER} worker)..."
+
+          RETRY=0
+          MAX_RETRY=40  # 40 * 15s = 10 min
+          while [ $RETRY -lt $MAX_RETRY ]; do
+            CONTROL_COUNT=$(aws ec2 describe-instances --no-verify-ssl \
+              --endpoint-url "${EC2_ENDPOINT}" \
+              --filters "Name=tag:run-id,Values=${{ github.run_id }}" \
+                        "Name=tag:zadara.com/k8s/role,Values=control" \
+                        "Name=instance-state-name,Values=running" \
+              --query 'Reservations[].Instances[].InstanceId' \
+              --output text 2>/dev/null | wc -w || echo 0)
+
+            WORKER_COUNT=$(aws ec2 describe-instances --no-verify-ssl \
+              --endpoint-url "${EC2_ENDPOINT}" \
+              --filters "Name=tag:run-id,Values=${{ github.run_id }}" \
+                        "Name=tag:zadara.com/k8s/role,Values=worker" \
+                        "Name=instance-state-name,Values=running" \
+              --query 'Reservations[].Instances[].InstanceId' \
+              --output text 2>/dev/null | wc -w || echo 0)
+
+            echo "Attempt $((RETRY + 1))/$MAX_RETRY: Control=${CONTROL_COUNT}/${EXPECTED_CONTROL} Worker=${WORKER_COUNT}/${EXPECTED_WORKER}"
+
+            if [ "$CONTROL_COUNT" -ge "$EXPECTED_CONTROL" ] && [ "$WORKER_COUNT" -ge "$EXPECTED_WORKER" ]; then
+              echo "All expected ASG instances are running"
+              break
+            fi
+
+            RETRY=$((RETRY + 1))
+            sleep 15
+          done
+
+          if [ "$CONTROL_COUNT" -lt "$EXPECTED_CONTROL" ] || [ "$WORKER_COUNT" -lt "$EXPECTED_WORKER" ]; then
+            echo "::error::ASG instances did not reach expected count within 10 minutes"
+            echo "  Control: ${CONTROL_COUNT}/${EXPECTED_CONTROL}"
+            echo "  Worker: ${WORKER_COUNT}/${EXPECTED_WORKER}"
+            exit 1
+          fi
+
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ### ASG Instance Validation
+
+          | Role | Expected | Running |
+          |------|----------|---------|
+          | Control | ${EXPECTED_CONTROL} | ${CONTROL_COUNT} |
+          | Worker | ${EXPECTED_WORKER} | ${WORKER_COUNT} |
+          | **Total** | **$((EXPECTED_CONTROL + EXPECTED_WORKER))** | **$((CONTROL_COUNT + WORKER_COUNT))** |
+
+          All ASG instances launched successfully.
+          EOF
+
       # ============================================================
       # Phase 3.5: Connect bastion to cluster security group
       # ============================================================
@@ -303,6 +367,8 @@ jobs:
             exit 1
           fi
 
+          echo "control_ip=$CONTROL_IP" >> $GITHUB_OUTPUT
+
           # Wait for K3s to generate kubeconfig on the control node
           echo "Waiting for K3s kubeconfig on ${CONTROL_IP}..."
           for i in $(seq 1 40); do
@@ -341,11 +407,13 @@ jobs:
               "KUBECONFIG=~/kubeconfig.yaml kubectl $*"
           }
 
-          echo "Waiting for cluster to be healthy (timeout: 15 minutes)"
+          EXPECTED_NODES=4  # 3 control + 1 worker
 
-          # Poll for at least 1 node Ready (15s intervals, up to 60 retries = 15 min)
+          # --- Phase 1: Wait for at least 1 node Ready (fast sanity check) ---
+          echo "Phase 1: Waiting for at least 1 node to be Ready..."
+
           RETRY=0
-          MAX_RETRY=60
+          MAX_RETRY=60  # 60 * 15s = 15 min
           READY_NODES=0
 
           while [ $RETRY -lt $MAX_RETRY ]; do
@@ -375,9 +443,53 @@ jobs:
             exit 1
           fi
 
-          echo "Checking for coredns pods..."
+          # --- Phase 2: Wait for all expected nodes Ready ---
+          echo "Phase 2: Waiting for all ${EXPECTED_NODES} nodes to be Ready (10 min timeout)..."
 
-          # Wait for coredns to be Running (5 minute timeout)
+          RETRY=0
+          MAX_RETRY=40  # 40 * 15s = 10 min
+          ALL_READY=false
+
+          while [ $RETRY -lt $MAX_RETRY ]; do
+            NODES=$(bastion_kubectl get nodes --no-headers 2>/dev/null || true)
+            READY_NODES=$(echo "$NODES" | grep -c " Ready" || true)
+            TOTAL_NODES=$(echo "$NODES" | grep -c "." || true)
+
+            echo "Attempt $((RETRY + 1))/$MAX_RETRY: Nodes $READY_NODES/$TOTAL_NODES Ready (expecting ${EXPECTED_NODES})"
+
+            if [ "$READY_NODES" -ge "$EXPECTED_NODES" ]; then
+              echo "All ${EXPECTED_NODES} expected nodes are Ready"
+              ALL_READY=true
+              break
+            fi
+
+            RETRY=$((RETRY + 1))
+            sleep 15
+          done
+
+          if [ "$ALL_READY" != "true" ]; then
+            echo "::warning::Only $READY_NODES/$EXPECTED_NODES nodes became Ready within 10 minutes"
+            bastion_kubectl get nodes -o wide || true
+          fi
+
+          # --- Phase 3: Verify node roles via labels ---
+          echo "Phase 3: Verifying node roles..."
+
+          CONTROL_NODES=$(bastion_kubectl get nodes -l node-role.kubernetes.io/control-plane --no-headers 2>/dev/null | grep -c " Ready" || true)
+          WORKER_NODES=$(bastion_kubectl get nodes --no-headers 2>/dev/null | grep -vc "control-plane" || true)
+
+          echo "Control plane nodes Ready: ${CONTROL_NODES}"
+          echo "Worker nodes: ${WORKER_NODES}"
+
+          if [ "$CONTROL_NODES" -lt 1 ]; then
+            echo "::error::No control plane nodes found with expected labels"
+            bastion_kubectl get nodes --show-labels || true
+            exit 1
+          fi
+
+          # --- Phase 4: Wait for coredns ---
+          echo "Phase 4: Checking for coredns pods..."
+
           if ! bastion_kubectl wait --for=condition=Ready pod -l k8s-app=kube-dns -n kube-system --timeout=300s; then
             echo "::error::coredns pods not Ready within 5 minutes"
             echo "=== kube-system Pods ==="
@@ -398,12 +510,113 @@ jobs:
 
           | Check | Status |
           |-------|--------|
-          | Nodes Ready | $READY_NODE_COUNT |
-          | coredns Running | $COREDNS_COUNT |
+          | Nodes Ready | ${READY_NODE_COUNT}/${EXPECTED_NODES} |
+          | Control Plane Nodes | ${CONTROL_NODES} |
+          | Worker Nodes | ${WORKER_NODES} |
+          | coredns Running | ${COREDNS_COUNT} |
 
           **Cluster:** test-k8s-v$(echo '${{ matrix.k8s_version }}' | tr -d '.')-${{ github.run_id }}
           **Load Balancer:** ${{ steps.k8s.outputs.load_balancer_dns }}
           EOF
+
+      - name: Validate Helm charts
+        if: steps.kubeconfig.outcome == 'success'
+        timeout-minutes: 10
+        run: |
+          BASTION_IP="${{ steps.bastion.outputs.bastion_ip }}"
+          CONTROL_IP="${{ steps.kubeconfig.outputs.control_ip }}"
+          SSH_KEY="/tmp/bastion_ssh_key"
+          PROXY_CMD="ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} -W %h:%p ubuntu@${BASTION_IP}"
+
+          EXPECTED_RELEASES="zadara-aws-config traefik-elb aws-cloud-controller-manager flannel aws-ebs-csi-driver cluster-autoscaler aws-load-balancer-controller"
+          EXPECTED_COUNT=7
+
+          echo "Waiting for ${EXPECTED_COUNT} Helm releases to be present (10 min timeout)..."
+
+          RETRY=0
+          MAX_RETRY=40  # 40 * 15s = 10 min
+          ALL_PRESENT=false
+
+          while [ $RETRY -lt $MAX_RETRY ]; do
+            HELM_JSON=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+              -o "ProxyCommand=${PROXY_CMD}" -i ${SSH_KEY} \
+              "ubuntu@${CONTROL_IP}" \
+              "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm list -A --output json" 2>/dev/null || echo "[]")
+
+            FOUND_COUNT=0
+            MISSING=""
+            for RELEASE in $EXPECTED_RELEASES; do
+              if echo "$HELM_JSON" | grep -q "\"${RELEASE}\""; then
+                FOUND_COUNT=$((FOUND_COUNT + 1))
+              else
+                MISSING="${MISSING} ${RELEASE}"
+              fi
+            done
+
+            echo "Attempt $((RETRY + 1))/$MAX_RETRY: ${FOUND_COUNT}/${EXPECTED_COUNT} releases present"
+
+            if [ "$FOUND_COUNT" -ge "$EXPECTED_COUNT" ]; then
+              echo "All expected Helm releases are present"
+              ALL_PRESENT=true
+              break
+            fi
+
+            if [ -n "$MISSING" ]; then
+              echo "  Missing:${MISSING}"
+            fi
+
+            RETRY=$((RETRY + 1))
+            sleep 15
+          done
+
+          # Build release table for summary
+          echo "### Helm Release Validation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Release | Chart | Status | Namespace |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-------|--------|-----------|" >> $GITHUB_STEP_SUMMARY
+
+          HAS_NON_DEPLOYED=false
+          for RELEASE in $EXPECTED_RELEASES; do
+            CHART=$(echo "$HELM_JSON" | python3 -c "
+          import json, sys
+          releases = json.load(sys.stdin)
+          match = [r for r in releases if r['name'] == '${RELEASE}']
+          print(match[0]['chart'] if match else 'NOT FOUND')
+          " 2>/dev/null || echo "NOT FOUND")
+
+            STATUS=$(echo "$HELM_JSON" | python3 -c "
+          import json, sys
+          releases = json.load(sys.stdin)
+          match = [r for r in releases if r['name'] == '${RELEASE}']
+          print(match[0]['status'] if match else 'MISSING')
+          " 2>/dev/null || echo "MISSING")
+
+            NAMESPACE=$(echo "$HELM_JSON" | python3 -c "
+          import json, sys
+          releases = json.load(sys.stdin)
+          match = [r for r in releases if r['name'] == '${RELEASE}']
+          print(match[0]['namespace'] if match else '-')
+          " 2>/dev/null || echo "-")
+
+            echo "| ${RELEASE} | ${CHART} | ${STATUS} | ${NAMESPACE} |" >> $GITHUB_STEP_SUMMARY
+
+            if [ "$STATUS" != "deployed" ] && [ "$STATUS" != "MISSING" ]; then
+              HAS_NON_DEPLOYED=true
+            fi
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$ALL_PRESENT" != "true" ]; then
+            echo "::error::Expected Helm releases not found after 10 minutes. Missing:${MISSING}"
+            exit 1
+          fi
+
+          if [ "$HAS_NON_DEPLOYED" = "true" ]; then
+            echo "::warning::Some Helm releases are not in 'deployed' status"
+          fi
+
+          echo "All ${EXPECTED_COUNT} Helm releases validated successfully"
 
       # ============================================================
       # Cleanup: Reverse order (Bastion -> K8s -> IAM -> VPC)
