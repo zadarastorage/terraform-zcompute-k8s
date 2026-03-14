@@ -55,6 +55,7 @@ for addon in $(jq -c -r 'to_entries | sort_by(.value.order, .key)[]' /etc/zadara
 	repository_name=$(echo "${addon}" | jq -c -r '.value.repository_name')
 	chart=$(echo "${addon}" | jq -c -r '.value.chart')
 	should_wait=$(echo "${addon}" | jq -c -r '.value.wait')
+	timeout=$(echo "${addon}" | jq -c -r '.value.timeout')
 	version=$(echo "${addon}" | jq -c -r '.value.version')
 	namespace=$(echo "${addon}" | jq -c -r '.value.namespace')
 	config=$(echo "${addon}" | jq -c -r '.value.config')
@@ -71,6 +72,7 @@ for addon in $(jq -c -r 'to_entries | sort_by(.value.order, .key)[]' /etc/zadara
 			'--kube-apiserver' "https://${CLUSTER_KAPI}:6443"
 		)
 		[[ "${should_wait:-}" == "true" ]] && HELM_ARGS+=("--wait")
+		[[ "${timeout:-null}" != "null" ]] && HELM_ARGS+=("--timeout" "${timeout}")
 		_log "[executing] helm ${HELM_ARGS[@]}"
 		if [[ "${config}" != "null" ]]; then
 			false
