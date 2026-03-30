@@ -64,11 +64,19 @@ ssh_control() {
   ssh -o ConnectTimeout=10 "ubuntu@${CONTROL_IP}" "$@"
 }
 
+# Verify SSH connectivity before entering the wait loop
+echo "=== SSH config ==="
+cat ~/.ssh/config
+echo "=== Verifying bastion connectivity ==="
+ssh -o ConnectTimeout=10 "ubuntu@bastion" "echo 'bastion OK'" 2>&1 || echo "::warning::Cannot SSH to bastion"
+echo "=== Verifying control node connectivity via bastion ==="
+ssh -v -o ConnectTimeout=10 "ubuntu@${CONTROL_IP}" "echo 'control node OK'" 2>&1 || echo "::warning::Cannot SSH to control node (see verbose output above)"
+
 # Wait for K3s to generate kubeconfig on the control node
 echo "Waiting for K3s kubeconfig on ${CONTROL_IP}..."
 KUBECONFIG_FOUND=false
 for i in $(seq 1 40); do
-  if ssh_control "sudo test -f /etc/rancher/k3s/k3s.yaml" 2>/dev/null; then
+  if ssh_control "sudo test -f /etc/rancher/k3s/k3s.yaml"; then
     echo "K3s kubeconfig found"
     KUBECONFIG_FOUND=true
     break
@@ -78,16 +86,18 @@ for i in $(seq 1 40); do
   # Collect diagnostics at attempts 10, 20, 30, and 40
   if [ $((i % 10)) -eq 0 ]; then
     echo "--- Diagnostics at attempt ${i} ---"
+    echo "=== SSH connectivity test ==="
+    ssh_control "echo 'SSH OK'" 2>&1 || echo "(SSH to control node failed)"
     echo "=== Bootstrap loader log ==="
-    ssh_control "sudo cat /var/log/bootstrap/boot.log 2>/dev/null || echo 'no boot.log'" 2>/dev/null || echo "(SSH failed)"
+    ssh_control "sudo cat /var/log/bootstrap/boot.log" 2>&1 || echo "(SSH failed)"
     echo "=== Bootstrap failure log ==="
-    ssh_control "sudo cat /var/log/bootstrap-failed 2>/dev/null || echo 'no failure log'" 2>/dev/null || echo "(SSH failed)"
+    ssh_control "sudo cat /var/log/bootstrap-failed 2>/dev/null || echo 'no failure log'" 2>&1 || echo "(SSH failed)"
     echo "=== Cloud-init status ==="
-    ssh_control "cloud-init status 2>/dev/null || echo 'cloud-init status unavailable'" 2>/dev/null || echo "(SSH failed)"
+    ssh_control "cloud-init status" 2>&1 || echo "(SSH failed)"
     echo "=== K3s service status ==="
-    ssh_control "sudo systemctl status k3s --no-pager -l 2>/dev/null || echo 'k3s service not found'" 2>/dev/null || echo "(SSH failed)"
+    ssh_control "sudo systemctl status k3s --no-pager -l 2>/dev/null || echo 'k3s service not found'" 2>&1 || echo "(SSH failed)"
     echo "=== K3s install log (last 20 lines) ==="
-    ssh_control "sudo tail -20 /var/log/bootstrap/common-20-setup-k3s.sh.log 2>/dev/null || echo 'no k3s log'" 2>/dev/null || echo "(SSH failed)"
+    ssh_control "sudo tail -20 /var/log/bootstrap/common-20-setup-k3s.sh.log 2>/dev/null || echo 'no k3s log'" 2>&1 || echo "(SSH failed)"
     echo "--- End diagnostics ---"
   fi
 
