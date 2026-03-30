@@ -8,7 +8,8 @@
 #   GITHUB_STEP_SUMMARY - (set by Actions)
 set -euo pipefail
 
-PROXY_CMD="ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} -W %h:%p ubuntu@${BASTION_IP}"
+# SSH config is written by copy-kubeconfig.sh (runs earlier in the same job)
+# which configures bastion as ProxyJump for 10.* hosts
 
 EXPECTED_RELEASES="zadara-aws-config traefik-elb aws-cloud-controller-manager flannel aws-ebs-csi-driver cluster-autoscaler aws-load-balancer-controller"
 EXPECTED_COUNT=7
@@ -22,8 +23,7 @@ HELM_JSON="[]"
 MISSING=""
 
 while [ $RETRY -lt $MAX_RETRY ]; do
-  HELM_JSON=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
-    -o "ProxyCommand=${PROXY_CMD}" -i "${SSH_KEY}" \
+  HELM_JSON=$(ssh -o ConnectTimeout=10 \
     "ubuntu@${CONTROL_IP}" \
     "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm list -A --output json" 2>/dev/null || echo "[]")
 

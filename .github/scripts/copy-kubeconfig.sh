@@ -10,7 +10,25 @@
 #   GITHUB_OUTPUT - (set by Actions)
 set -euo pipefail
 
-PROXY_CMD="ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} -W %h:%p ubuntu@${BASTION_IP}"
+# Configure SSH for bastion jump host
+# Using ~/.ssh/config avoids key/auth issues with ProxyCommand string expansion
+mkdir -p ~/.ssh
+cat > ~/.ssh/config <<SSHEOF
+Host bastion
+  HostName ${BASTION_IP}
+  User ubuntu
+  IdentityFile ${SSH_KEY}
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+
+Host 10.*
+  User ubuntu
+  IdentityFile ${SSH_KEY}
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ProxyJump bastion
+SSHEOF
+chmod 600 ~/.ssh/config
 
 # Find the oldest running control plane node via zCompute EC2 API.
 # The oldest node is the seed (cluster-init) node — most likely to
@@ -41,28 +59,52 @@ fi
 
 echo "control_ip=$CONTROL_IP" >> "$GITHUB_OUTPUT"
 
+# SSH helper: run a command on the control node via bastion jump host
+ssh_control() {
+  ssh -o ConnectTimeout=10 "ubuntu@${CONTROL_IP}" "$@"
+}
+
 # Wait for K3s to generate kubeconfig on the control node
 echo "Waiting for K3s kubeconfig on ${CONTROL_IP}..."
+KUBECONFIG_FOUND=false
 for i in $(seq 1 40); do
-  if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
-         -o "ProxyCommand=${PROXY_CMD}" -i "${SSH_KEY}" \
-         "ubuntu@${CONTROL_IP}" \
-         "sudo test -f /etc/rancher/k3s/k3s.yaml" 2>/dev/null; then
+  if ssh_control "sudo test -f /etc/rancher/k3s/k3s.yaml" 2>/dev/null; then
     echo "K3s kubeconfig found"
+    KUBECONFIG_FOUND=true
     break
   fi
   echo "Attempt ${i}/40: K3s not ready yet..."
+
+  # Collect diagnostics at attempts 10, 20, 30, and 40
+  if [ $((i % 10)) -eq 0 ]; then
+    echo "--- Diagnostics at attempt ${i} ---"
+    echo "=== Bootstrap loader log ==="
+    ssh_control "sudo cat /var/log/bootstrap/boot.log 2>/dev/null || echo 'no boot.log'" 2>/dev/null || echo "(SSH failed)"
+    echo "=== Bootstrap failure log ==="
+    ssh_control "sudo cat /var/log/bootstrap-failed 2>/dev/null || echo 'no failure log'" 2>/dev/null || echo "(SSH failed)"
+    echo "=== Cloud-init status ==="
+    ssh_control "cloud-init status 2>/dev/null || echo 'cloud-init status unavailable'" 2>/dev/null || echo "(SSH failed)"
+    echo "=== K3s service status ==="
+    ssh_control "sudo systemctl status k3s --no-pager -l 2>/dev/null || echo 'k3s service not found'" 2>/dev/null || echo "(SSH failed)"
+    echo "=== K3s install log (last 20 lines) ==="
+    ssh_control "sudo tail -20 /var/log/bootstrap/common-20-setup-k3s.sh.log 2>/dev/null || echo 'no k3s log'" 2>/dev/null || echo "(SSH failed)"
+    echo "--- End diagnostics ---"
+  fi
+
   sleep 15
 done
 
+if [ "$KUBECONFIG_FOUND" != "true" ]; then
+  echo "::error::K3s kubeconfig not found after 40 attempts (10 minutes)"
+  exit 1
+fi
+
 # Extract kubeconfig and replace localhost with LB DNS
-ssh -o StrictHostKeyChecking=no -o "ProxyCommand=${PROXY_CMD}" -i "${SSH_KEY}" \
-  "ubuntu@${CONTROL_IP}" "sudo cat /etc/rancher/k3s/k3s.yaml" | \
+ssh_control "sudo cat /etc/rancher/k3s/k3s.yaml" | \
   sed "s|server: https://127.0.0.1:6443|server: https://${LB_DNS}:6443|" \
   > /tmp/kubeconfig.yaml
 
 # Copy to bastion
-scp -o StrictHostKeyChecking=no -i "${SSH_KEY}" \
-  /tmp/kubeconfig.yaml "ubuntu@${BASTION_IP}:~/kubeconfig.yaml"
+scp /tmp/kubeconfig.yaml "ubuntu@bastion:~/kubeconfig.yaml"
 
 echo "::notice::Real K3s kubeconfig copied to bastion (via control node ${CONTROL_IP})"
