@@ -83,7 +83,7 @@ jobs:
       TF_VAR_zcompute_secret_key: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
       TF_VAR_run_id: ${{ github.run_id }}
       TF_VAR_cluster_version: ${{ matrix.k8s_version }}
-      TF_VAR_module_version: ${{ github.ref_name }}
+      TF_VAR_module_version: ${{ github.head_ref || github.ref_name }}
 
     steps:
       - name: Checkout
