@@ -75,7 +75,7 @@ jobs:
       max-parallel: 1      # Sequential execution - CRITICAL for zCompute
       fail-fast: false     # Continue to collect all version failures
       matrix:
-        k8s_version: ["1.35", "1.34", "1.33", "1.32"]
+        k8s_version: ["1.35.3", "1.34.6", "1.33.10", "1.32.13"]
 
     env:
       TF_VAR_zcompute_endpoint_url: ${{ secrets.ZCOMPUTE_ENDPOINT }}
