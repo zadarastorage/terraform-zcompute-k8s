@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.1.0](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v3.0.1...v3.1.0) (2026-03-31)
+
+
+### Features
+
+* **ci:** add ASG, node role, and Helm chart validations to integration tests ([4db6452](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/4db6452d12eae0b436be5b59fee68e03f68b9e81))
+* **helm:** add EC2 tag alongside k8s label during helm setup mutex ([70d921c](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/70d921c0117cf5224525d255d39080bd4b138b4d))
+* **helm:** support optional per-chart timeout override ([10c7495](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/10c749556ffbe1b7953f840987bc51b936fec412))
+
+
+### Bug Fixes
+
+* **ci:** add client-side jq tag filtering as defense-in-depth ([f769806](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/f76980670ffac9000541b7d51369b7dceb72e141))
+* **ci:** add network diagnostics, VPC subnet tags, and bump VPC to v1.1.1 ([710503a](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/710503a0ca197e610b0d4759e7403aeb362485d7))
+* **ci:** add SSH ingress rule to K8s test fixture security group ([34d1120](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/34d1120f299a59f5167f4a737e6f197dc8afd1bb))
+* **ci:** clean up cloud-controller resources before VPC destroy ([e8f3148](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/e8f3148e281cde5ba8aa39571ba7c35179b95197))
+* **ci:** clean up cloud-controller resources before VPC destroy ([2b7871f](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/2b7871f0d59f05093357aea0a018b4a2bd562ad1))
+* **ci:** namespace IAM resources by K8s version to prevent collisions ([56c6eeb](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/56c6eeb2bf73fb36a374a35b72db37d88ccfb666))
+* **ci:** stop masking SSH errors in copy-kubeconfig diagnostics ([800545c](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/800545cd386dca6b8135462e1cc0165383b2af0f))
+* **ci:** use full K3s patch versions in test matrix ([6ee7922](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/6ee79224b6c389f108724011a5d32698dd15e4c1))
+* **ci:** use head_ref for PR module_version and pin trivy to safe SHA ([216c8fb](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/216c8fb7fb4d39862539bfce55450fd9b55dfe19))
+* **ci:** use SSH config with ProxyJump for bastion jump host ([301b77b](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/301b77b54728d450a9a4b85b4d07d3b4219c0c5f))
+* **ci:** verify cluster SG is passed to bastion update step ([a78de51](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/a78de51cdefd72e37f9d549629b195047c6cdce4))
+* **k3s:** fix control-plane bootstrap exit code and seed election variable ([5f63e6a](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/5f63e6a160a9b63eda1429acd941ea89bacfa031))
+* **variables:** relax module_version validation for branch testing ([02deb2b](https://github.com/zadarastorage/terraform-zcompute-k8s/commit/02deb2beb2d656fb900839dfbe7c1e4553798ee4))
+
 ## [3.0.1](https://github.com/zadarastorage/terraform-zcompute-k8s/compare/v3.0.0...v3.0.1) (2026-02-23)
 
 
