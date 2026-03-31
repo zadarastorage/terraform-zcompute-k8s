@@ -18,21 +18,27 @@ CONTROL_COUNT=0
 WORKER_COUNT=0
 
 while [ $RETRY -lt $MAX_RETRY ]; do
-  CONTROL_COUNT=$(aws ec2 describe-instances --no-verify-ssl \
+  # Query with server-side filters, then re-filter client-side with jq
+  # to guard against zCompute tag filtering inconsistencies
+  ALL_INSTANCES=$(aws ec2 describe-instances --no-verify-ssl \
     --endpoint-url "${EC2_ENDPOINT}" \
     --filters "Name=tag:run-id,Values=${RUN_ID}" \
-              "Name=tag:zadara.com/k8s/role,Values=control" \
               "Name=instance-state-name,Values=running" \
-    --query 'Reservations[].Instances[].InstanceId' \
-    --output text 2>/dev/null | wc -w || echo 0)
+    --output json 2>/dev/null || echo '{"Reservations":[]}')
 
-  WORKER_COUNT=$(aws ec2 describe-instances --no-verify-ssl \
-    --endpoint-url "${EC2_ENDPOINT}" \
-    --filters "Name=tag:run-id,Values=${RUN_ID}" \
-              "Name=tag:zadara.com/k8s/role,Values=worker" \
-              "Name=instance-state-name,Values=running" \
-    --query 'Reservations[].Instances[].InstanceId' \
-    --output text 2>/dev/null | wc -w || echo 0)
+  CONTROL_COUNT=$(echo "$ALL_INSTANCES" | jq --arg run_id "${RUN_ID}" '
+    [.Reservations[].Instances[]
+     | select(.State.Name == "running")
+     | select(any(.Tags[]?; .Key == "run-id" and .Value == $run_id))
+     | select(any(.Tags[]?; .Key == "zadara.com/k8s/role" and .Value == "control"))
+    ] | length')
+
+  WORKER_COUNT=$(echo "$ALL_INSTANCES" | jq --arg run_id "${RUN_ID}" '
+    [.Reservations[].Instances[]
+     | select(.State.Name == "running")
+     | select(any(.Tags[]?; .Key == "run-id" and .Value == $run_id))
+     | select(any(.Tags[]?; .Key == "zadara.com/k8s/role" and .Value == "worker"))
+    ] | length')
 
   echo "Attempt $((RETRY + 1))/$MAX_RETRY: Control=${CONTROL_COUNT}/${EXPECTED_CONTROL} Worker=${WORKER_COUNT}/${EXPECTED_WORKER}"
 

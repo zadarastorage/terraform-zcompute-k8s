@@ -36,13 +36,21 @@ chmod 600 ~/.ssh/config
 echo "Looking for the oldest control plane node..."
 CONTROL_IP=""
 for i in $(seq 1 40); do
+  # Query with server-side filters, then re-filter client-side with jq
+  # to guard against zCompute tag filtering inconsistencies
   CONTROL_IP=$(aws ec2 describe-instances --no-verify-ssl \
     --endpoint-url "${EC2_ENDPOINT}" \
     --filters "Name=tag:run-id,Values=${RUN_ID}" \
               "Name=tag:zadara.com/k8s/role,Values=control" \
               "Name=instance-state-name,Values=running" \
-    --query 'sort_by(Reservations[].Instances[], &LaunchTime)[0].PrivateIpAddress' \
-    --output text 2>/dev/null || true)
+    --output json 2>/dev/null \
+    | jq -r --arg run_id "${RUN_ID}" '
+      [.Reservations[].Instances[]
+       | select(.State.Name == "running")
+       | select(any(.Tags[]?; .Key == "run-id" and .Value == $run_id))
+       | select(any(.Tags[]?; .Key == "zadara.com/k8s/role" and .Value == "control"))
+      ] | sort_by(.LaunchTime) | first | .PrivateIpAddress // empty
+    ' || true)
 
   if [ -n "$CONTROL_IP" ] && [ "$CONTROL_IP" != "None" ] && [ "$CONTROL_IP" != "null" ]; then
     echo "Found oldest control plane node at ${CONTROL_IP}"
