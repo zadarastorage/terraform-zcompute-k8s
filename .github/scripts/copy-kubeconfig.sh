@@ -69,6 +69,43 @@ echo "=== SSH config ==="
 cat ~/.ssh/config
 echo "=== Verifying bastion connectivity ==="
 ssh -o ConnectTimeout=10 "ubuntu@bastion" "echo 'bastion OK'" 2>&1 || echo "::warning::Cannot SSH to bastion"
+
+echo "=== Bastion network diagnostics ==="
+ssh -o ConnectTimeout=10 "ubuntu@bastion" "
+  echo '--- ip route ---'
+  ip route
+  echo '--- ip addr ---'
+  ip -4 addr show
+  echo '--- security groups (curl metadata) ---'
+  curl -sf http://169.254.169.254/latest/meta-data/security-groups 2>/dev/null || echo 'metadata unavailable'
+  echo '--- arp table ---'
+  arp -n 2>/dev/null || ip neigh show 2>/dev/null || echo 'no arp info'
+  echo '--- ping control node ---'
+  ping -c 2 -W 2 ${CONTROL_IP} 2>&1 || echo 'ping failed'
+  echo '--- nc port 22 ---'
+  nc -zv -w 3 ${CONTROL_IP} 22 2>&1 || echo 'port 22 unreachable'
+" 2>&1 || echo "::warning::Bastion diagnostics failed"
+
+echo "=== VPC route tables (from API) ==="
+# Get bastion's subnet to find its route table
+BASTION_INSTANCE=$(aws ec2 describe-instances --no-verify-ssl \
+  --endpoint-url "${EC2_ENDPOINT}" \
+  --filters "Name=tag:Name,Values=*${RUN_ID}*bastion*" \
+            "Name=instance-state-name,Values=running" \
+  --query 'Reservations[].Instances[0].[SubnetId,VpcId]' \
+  --output text 2>&1) || true
+echo "Bastion instance: ${BASTION_INSTANCE}"
+# Describe all route tables in the VPC
+VPC_ID=$(echo "${BASTION_INSTANCE}" | awk '{print $2}')
+if [ -n "${VPC_ID}" ] && [ "${VPC_ID}" != "None" ]; then
+  echo "--- Route tables for VPC ${VPC_ID} ---"
+  aws ec2 describe-route-tables --no-verify-ssl \
+    --endpoint-url "${EC2_ENDPOINT}" \
+    --filters "Name=vpc-id,Values=${VPC_ID}" \
+    --query 'RouteTables[].{TableId:RouteTableId,Associations:Associations[].SubnetId,Routes:Routes[].{Dest:DestinationCidrBlock,Target:GatewayId,NAT:NatGatewayId,State:State}}' \
+    --output json 2>&1 || echo "Failed to describe route tables"
+fi
+
 echo "=== Verifying control node connectivity via bastion ==="
 ssh -v -o ConnectTimeout=10 "ubuntu@${CONTROL_IP}" "echo 'control node OK'" 2>&1 || echo "::warning::Cannot SSH to control node (see verbose output above)"
 
