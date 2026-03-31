@@ -40,6 +40,7 @@ until [ -n "$(which kubectl)" ]; do sleep 1s ; done
 until [ -e ${KUBECONFIG} ]; do sleep 1s ; done
 [ $(kubectl get nodes -l ${LABEL_MUTEX} -o name --sort-by='.metadata.creationTimestamp' 2> /dev/null | wc -l) -gt 0 ] && kubectl label nodes ${INSTANCE_ID} ${LABEL_MUTEX}- && _log "Mutex ${LABEL_MUTEX} found, exiting." && exit
 kubectl label nodes ${INSTANCE_ID} ${LABEL_MUTEX}=$(date +%s)
+aws ec2 create-tags --resources "${INSTANCE_ID}" --tags "Key=${LABEL_MUTEX},Value=$(date +%s)" 2>/dev/null || _log "[warn] Failed to create EC2 tag ${LABEL_MUTEX}"
 for addon in $(jq -c -r 'to_entries[] | {"repository_name": .value.repository_name, "repository_url": .value.repository_url}' /etc/zadara/k8s_helm.json | sort -u); do
 	repository_name=$(echo "${addon}" | jq -c -r '.repository_name')
 	repository_url=$(echo "${addon}" | jq -c -r '.repository_url')
@@ -48,12 +49,13 @@ for addon in $(jq -c -r 'to_entries[] | {"repository_name": .value.repository_na
 done
 helm repo update
 until [ -n "${MUTEX_NODE}" ]; do MUTEX_NODE=$(kubectl get nodes -l ${LABEL_MUTEX} -o name --sort-by='.metadata.creationTimestamp' 2> /dev/null | head -n 1 | cut -d '/' -f2-) ; sleep 1s ; done
-[ "${MUTEX_NODE}" != "${INSTANCE_ID}" ] && kubectl label nodes ${INSTANCE_ID} ${LABEL_MUTEX}- && _log "Mutex ${LABEL_MUTEX} claims holder is '${MUTEX_NODE}', but I'm ${INSTANCE_ID}. Bye" && exit
+[ "${MUTEX_NODE}" != "${INSTANCE_ID}" ] && kubectl label nodes ${INSTANCE_ID} ${LABEL_MUTEX}- && { aws ec2 delete-tags --resources "${INSTANCE_ID}" --tags "Key=${LABEL_MUTEX}" 2>/dev/null ||:; } && _log "Mutex ${LABEL_MUTEX} claims holder is '${MUTEX_NODE}', but I'm ${INSTANCE_ID}. Bye" && exit
 for addon in $(jq -c -r 'to_entries | sort_by(.value.order, .key)[]' /etc/zadara/k8s_helm.json); do
 	id=$(echo "${addon}" | jq -c -r '.key')
 	repository_name=$(echo "${addon}" | jq -c -r '.value.repository_name')
 	chart=$(echo "${addon}" | jq -c -r '.value.chart')
 	should_wait=$(echo "${addon}" | jq -c -r '.value.wait')
+	timeout=$(echo "${addon}" | jq -c -r '.value.timeout')
 	version=$(echo "${addon}" | jq -c -r '.value.version')
 	namespace=$(echo "${addon}" | jq -c -r '.value.namespace')
 	config=$(echo "${addon}" | jq -c -r '.value.config')
@@ -70,6 +72,7 @@ for addon in $(jq -c -r 'to_entries | sort_by(.value.order, .key)[]' /etc/zadara
 			'--kube-apiserver' "https://${CLUSTER_KAPI}:6443"
 		)
 		[[ "${should_wait:-}" == "true" ]] && HELM_ARGS+=("--wait")
+		[[ "${timeout:-null}" != "null" ]] && HELM_ARGS+=("--timeout" "${timeout}")
 		_log "[executing] helm ${HELM_ARGS[@]}"
 		if [[ "${config}" != "null" ]]; then
 			false
@@ -81,3 +84,4 @@ for addon in $(jq -c -r 'to_entries | sort_by(.value.order, .key)[]' /etc/zadara
 	fi
 done
 kubectl label nodes ${INSTANCE_ID} ${LABEL_MUTEX}-
+aws ec2 delete-tags --resources "${INSTANCE_ID}" --tags "Key=${LABEL_MUTEX}" 2>/dev/null || _log "[warn] Failed to delete EC2 tag ${LABEL_MUTEX}"

@@ -7,6 +7,7 @@ on:
       - '**.tf'
       - 'tests/**'
       - '.github/workflows/integration-test.yml'
+      - '.github/scripts/**'
   push:
     branches: [main]
     paths:
@@ -74,7 +75,7 @@ jobs:
       max-parallel: 1      # Sequential execution - CRITICAL for zCompute
       fail-fast: false     # Continue to collect all version failures
       matrix:
-        k8s_version: ["1.35", "1.34", "1.33", "1.32"]
+        k8s_version: ["1.35.3", "1.34.6", "1.33.10", "1.32.13"]
 
     env:
       TF_VAR_zcompute_endpoint_url: ${{ secrets.ZCOMPUTE_ENDPOINT }}
@@ -82,7 +83,7 @@ jobs:
       TF_VAR_zcompute_secret_key: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
       TF_VAR_run_id: ${{ github.run_id }}
       TF_VAR_cluster_version: ${{ matrix.k8s_version }}
-      TF_VAR_module_version: ${{ github.ref_name }}
+      TF_VAR_module_version: ${{ github.head_ref || github.ref_name }}
 
     steps:
       - name: Checkout
@@ -217,6 +218,18 @@ jobs:
           TF_VAR_debug_ssh_public_key: ${{ vars.DEBUG_SSH_PUBLIC_KEY }}
           # Note: TF_VAR_cluster_version, TF_VAR_module_version, TF_VAR_run_id inherited from job-level env
 
+      - name: Validate ASG instances
+        id: asg_validation
+        if: steps.k8s.outcome == 'success'
+        timeout-minutes: 10
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+          EC2_ENDPOINT: ${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/ec2
+          RUN_ID: ${{ github.run_id }}
+        run: .github/scripts/validate-asg-instances.sh
+
       # ============================================================
       # Phase 3.5: Connect bastion to cluster security group
       # ============================================================
@@ -231,35 +244,23 @@ jobs:
           TF_VAR_debug_ssh_public_key: ${{ vars.DEBUG_SSH_PUBLIC_KEY }}
           TF_VAR_cluster_security_group_id: ${{ steps.k8s.outputs.cluster_security_group_id }}
         run: |
+          echo "Cluster security group ID: '${TF_VAR_cluster_security_group_id}'"
+          if [ -z "${TF_VAR_cluster_security_group_id}" ]; then
+            echo "::error::cluster_security_group_id is empty — bastion cannot join the cluster SG"
+            exit 1
+          fi
           echo "Adding cluster security group to bastion instance"
+          terraform plan -input=false | head -50
           terraform apply -auto-approve -input=false
-          echo "::notice::Bastion connected to cluster security group"
+          echo "::notice::Bastion connected to cluster security group ${TF_VAR_cluster_security_group_id}"
 
       - name: Wait for bastion SSH readiness
         if: steps.k8s.outcome == 'success'
         timeout-minutes: 10
-        run: |
-          BASTION_IP="${{ steps.bastion.outputs.bastion_ip }}"
-          echo "Waiting for bastion SSH at ${BASTION_IP} (timeout: 10 minutes)"
-
-          RETRY=0
-          MAX_RETRY=40  # 40 * 15s = 10 min
-          while [ $RETRY -lt $MAX_RETRY ]; do
-            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
-                   -i /tmp/bastion_ssh_key "ubuntu@${BASTION_IP}" \
-                   "test -f /tmp/bastion-ready" 2>/dev/null; then
-              echo "Bastion is ready"
-              break
-            fi
-            echo "Attempt $((RETRY + 1))/$MAX_RETRY: bastion not ready yet..."
-            RETRY=$((RETRY + 1))
-            sleep 15
-          done
-
-          if [ $RETRY -ge $MAX_RETRY ]; then
-            echo "::error::Bastion SSH did not become ready within 10 minutes"
-            exit 1
-          fi
+        env:
+          BASTION_IP: ${{ steps.bastion.outputs.bastion_ip }}
+          SSH_KEY: /tmp/bastion_ssh_key
+        run: .github/scripts/wait-for-bastion.sh
 
       - name: Copy kubeconfig from control node
         id: kubeconfig
@@ -269,141 +270,31 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
           AWS_DEFAULT_REGION: us-east-1
-        run: |
-          BASTION_IP="${{ steps.bastion.outputs.bastion_ip }}"
-          LB_DNS="${{ steps.k8s.outputs.load_balancer_dns }}"
-          SSH_KEY="/tmp/bastion_ssh_key"
-          EC2_ENDPOINT="${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/ec2"
-          PROXY_CMD="ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} -W %h:%p ubuntu@${BASTION_IP}"
-
-          # Find the oldest running control plane node via zCompute EC2 API.
-          # The oldest node is the seed (cluster-init) node — most likely to
-          # have K3s fully bootstrapped and the kubeconfig ready.
-          echo "Looking for the oldest control plane node..."
-          CONTROL_IP=""
-          for i in $(seq 1 40); do
-            CONTROL_IP=$(aws ec2 describe-instances --no-verify-ssl \
-              --endpoint-url "${EC2_ENDPOINT}" \
-              --filters "Name=tag:run-id,Values=${{ github.run_id }}" \
-                        "Name=tag:zadara.com/k8s/role,Values=control" \
-                        "Name=instance-state-name,Values=running" \
-              --query 'sort_by(Reservations[].Instances[], &LaunchTime)[0].PrivateIpAddress' \
-              --output text 2>/dev/null || true)
-
-            if [ -n "$CONTROL_IP" ] && [ "$CONTROL_IP" != "None" ] && [ "$CONTROL_IP" != "null" ]; then
-              echo "Found oldest control plane node at ${CONTROL_IP}"
-              break
-            fi
-            echo "Attempt ${i}/40: no running control node found yet..."
-            sleep 15
-          done
-
-          if [ -z "$CONTROL_IP" ] || [ "$CONTROL_IP" = "None" ] || [ "$CONTROL_IP" = "null" ]; then
-            echo "::error::No control plane node found within 10 minutes"
-            exit 1
-          fi
-
-          # Wait for K3s to generate kubeconfig on the control node
-          echo "Waiting for K3s kubeconfig on ${CONTROL_IP}..."
-          for i in $(seq 1 40); do
-            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
-                   -o "ProxyCommand=${PROXY_CMD}" -i ${SSH_KEY} \
-                   "ubuntu@${CONTROL_IP}" \
-                   "sudo test -f /etc/rancher/k3s/k3s.yaml" 2>/dev/null; then
-              echo "K3s kubeconfig found"
-              break
-            fi
-            echo "Attempt ${i}/40: K3s not ready yet..."
-            sleep 15
-          done
-
-          # Extract kubeconfig and replace localhost with LB DNS
-          ssh -o StrictHostKeyChecking=no -o "ProxyCommand=${PROXY_CMD}" -i ${SSH_KEY} \
-            "ubuntu@${CONTROL_IP}" "sudo cat /etc/rancher/k3s/k3s.yaml" | \
-            sed "s|server: https://127.0.0.1:6443|server: https://${LB_DNS}:6443|" \
-            > /tmp/kubeconfig.yaml
-
-          # Copy to bastion
-          scp -o StrictHostKeyChecking=no -i ${SSH_KEY} \
-            /tmp/kubeconfig.yaml "ubuntu@${BASTION_IP}:~/kubeconfig.yaml"
-
-          echo "::notice::Real K3s kubeconfig copied to bastion (via control node ${CONTROL_IP})"
+          BASTION_IP: ${{ steps.bastion.outputs.bastion_ip }}
+          LB_DNS: ${{ steps.k8s.outputs.load_balancer_dns }}
+          SSH_KEY: /tmp/bastion_ssh_key
+          EC2_ENDPOINT: ${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/ec2
+          RUN_ID: ${{ github.run_id }}
+        run: .github/scripts/copy-kubeconfig.sh
 
       - name: Validate cluster health
         if: steps.kubeconfig.outcome == 'success'
         timeout-minutes: 15
-        run: |
-          BASTION_IP="${{ steps.bastion.outputs.bastion_ip }}"
-          SSH_OPTS="-o StrictHostKeyChecking=no -i /tmp/bastion_ssh_key"
+        env:
+          BASTION_IP: ${{ steps.bastion.outputs.bastion_ip }}
+          SSH_KEY: /tmp/bastion_ssh_key
+          CLUSTER_NAME: ${{ steps.k8s.outputs.cluster_name }}
+          LOAD_BALANCER_DNS: ${{ steps.k8s.outputs.load_balancer_dns }}
+        run: .github/scripts/validate-cluster-health.sh
 
-          bastion_kubectl() {
-            ssh $SSH_OPTS "ubuntu@${BASTION_IP}" \
-              "KUBECONFIG=~/kubeconfig.yaml kubectl $*"
-          }
-
-          echo "Waiting for cluster to be healthy (timeout: 15 minutes)"
-
-          # Poll for at least 1 node Ready (15s intervals, up to 60 retries = 15 min)
-          RETRY=0
-          MAX_RETRY=60
-          READY_NODES=0
-
-          while [ $RETRY -lt $MAX_RETRY ]; do
-            NODES=$(bastion_kubectl get nodes --no-headers 2>/dev/null || true)
-            READY_NODES=$(echo "$NODES" | grep -c " Ready" || true)
-            TOTAL_NODES=$(echo "$NODES" | grep -c "." || true)
-
-            echo "Attempt $((RETRY + 1))/$MAX_RETRY: Nodes $READY_NODES/$TOTAL_NODES Ready"
-
-            if [ "$READY_NODES" -ge 1 ]; then
-              echo "At least one node is Ready"
-              break
-            fi
-
-            RETRY=$((RETRY + 1))
-            sleep 15
-          done
-
-          if [ "$READY_NODES" -lt 1 ]; then
-            echo "::error::No nodes became Ready within 15 minutes"
-            echo "=== Node Status ==="
-            bastion_kubectl get nodes -o wide || true
-            echo "=== Node Descriptions ==="
-            bastion_kubectl describe nodes || true
-            echo "=== System Events ==="
-            bastion_kubectl get events -n kube-system --sort-by='.lastTimestamp' || true
-            exit 1
-          fi
-
-          echo "Checking for coredns pods..."
-
-          # Wait for coredns to be Running (5 minute timeout)
-          if ! bastion_kubectl wait --for=condition=Ready pod -l k8s-app=kube-dns -n kube-system --timeout=300s; then
-            echo "::error::coredns pods not Ready within 5 minutes"
-            echo "=== kube-system Pods ==="
-            bastion_kubectl get pods -n kube-system -o wide || true
-            echo "=== coredns Pod Descriptions ==="
-            bastion_kubectl describe pods -n kube-system -l k8s-app=kube-dns || true
-            exit 1
-          fi
-
-          echo "Cluster is healthy!"
-
-          # Write health summary
-          READY_NODE_COUNT=$(bastion_kubectl get nodes --no-headers | grep -c " Ready" || true)
-          COREDNS_COUNT=$(bastion_kubectl get pods -n kube-system -l k8s-app=kube-dns --no-headers | grep -c "Running" || true)
-
-          cat >> $GITHUB_STEP_SUMMARY << EOF
-          ### Cluster Health Validation
-
-          | Check | Status |
-          |-------|--------|
-          | Nodes Ready | $READY_NODE_COUNT |
-          | coredns Running | $COREDNS_COUNT |
-
-          **Cluster:** test-k8s-v$(echo '${{ matrix.k8s_version }}' | tr -d '.')-${{ github.run_id }}
-          **Load Balancer:** ${{ steps.k8s.outputs.load_balancer_dns }}
-          EOF
+      - name: Validate Helm charts
+        if: steps.kubeconfig.outcome == 'success'
+        timeout-minutes: 10
+        env:
+          BASTION_IP: ${{ steps.bastion.outputs.bastion_ip }}
+          CONTROL_IP: ${{ steps.kubeconfig.outputs.control_ip }}
+          SSH_KEY: /tmp/bastion_ssh_key
+        run: .github/scripts/validate-helm-charts.sh
 
       # ============================================================
       # Cleanup: Reverse order (Bastion -> K8s -> IAM -> VPC)
@@ -458,34 +349,9 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
           AWS_DEFAULT_REGION: us-east-1
-        run: |
-          # Construct cluster name matching the fixture pattern
-          # Note: tr -d '.' produces same result as Terraform's replace(".", "")
-          # Example: "1.35" -> "135" (both methods)
-          VERSION_SUFFIX="v$(echo '${{ matrix.k8s_version }}' | tr -d '.')"
-          CLUSTER_NAME="test-k8s-${VERSION_SUFFIX}-${{ github.run_id }}"
-          EC2_ENDPOINT="${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/ec2"
-
-          echo "Verifying cleanup of ${CLUSTER_NAME}..."
-
-          # Poll until no running instances found (max 10 min = 40 * 15s)
-          for i in $(seq 1 40); do
-            INSTANCES=$(aws ec2 describe-instances \
-              --endpoint-url "${EC2_ENDPOINT}" \
-              --filters "Name=tag:cluster-name,Values=${CLUSTER_NAME}" \
-                        "Name=instance-state-name,Values=pending,running,stopping,shutting-down" \
-              --query 'Reservations[].Instances[].InstanceId' \
-              --output text --no-verify-ssl 2>/dev/null || true)
-
-            if [ -z "$INSTANCES" ] || [ "$INSTANCES" = "None" ]; then
-              echo "Cleanup verified - no running instances with cluster-name=${CLUSTER_NAME}"
-              exit 0
-            fi
-            echo "Attempt ${i}/40: Instances still exist: ${INSTANCES}"
-            sleep 15
-          done
-
-          echo "::warning::Cleanup verification timed out after 10 minutes, proceeding anyway"
+          CLUSTER_NAME: ${{ steps.k8s.outputs.cluster_name }}
+          EC2_ENDPOINT: ${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/ec2
+        run: .github/scripts/verify-cleanup.sh
 
       - name: IAM - Destroy
         if: always() && steps.iam.outcome == 'success' && !inputs.skip_destroy
