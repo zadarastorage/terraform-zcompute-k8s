@@ -30,6 +30,14 @@ module "k8s" {
     iam_instance_profile = var.iam_instance_profile
     key_name             = var.ssh_key_name != "" ? var.ssh_key_name : null
     security_group_rules = {
+      ingress_ssh = {
+        description = "Allow SSH from VPC for bastion access"
+        protocol    = "tcp"
+        from_port   = 22
+        to_port     = 22
+        type        = "ingress"
+        cidr_blocks = ["10.200.0.0/16"]
+      }
       egress_ipv4 = {
         description = "Allow all outbound ipv4 traffic"
         protocol    = "all"
