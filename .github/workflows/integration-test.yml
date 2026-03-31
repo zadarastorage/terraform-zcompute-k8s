@@ -353,6 +353,18 @@ jobs:
           EC2_ENDPOINT: ${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/ec2
         run: .github/scripts/verify-cleanup.sh
 
+      - name: Cleanup cloud-controller resources
+        if: always() && steps.k8s.outcome == 'success' && !inputs.skip_destroy
+        timeout-minutes: 5
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ZCOMPUTE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ZCOMPUTE_SECRET_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+          VPC_ID: ${{ steps.vpc.outputs.vpc_id }}
+          EC2_ENDPOINT: ${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/ec2
+          ELB_ENDPOINT: ${{ secrets.ZCOMPUTE_ENDPOINT }}/api/v2/aws/elbv2
+        run: .github/scripts/cleanup-cloud-resources.sh
+
       - name: IAM - Destroy
         if: always() && steps.iam.outcome == 'success' && !inputs.skip_destroy
         working-directory: tests/fixtures/iam
