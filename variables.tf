@@ -145,6 +145,49 @@ variable "default_instance_type" {
   type        = string
 }
 
+variable "gpu_auto_setup" {
+  description = <<-EOT
+    Enable automatic GPU node configuration. When true and a node group uses
+    a known GPU instance type (ZGL4, ZGL40S, ZGA16, ZGA40 families), the module
+    automatically adds GPU labels, taints, and the NVIDIA driver setup script.
+    Set to false to skip automatic setup (e.g., if using gpu-operator instead).
+    Can be overridden per node group.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "gpu_taint_enabled" {
+  description = <<-EOT
+    Whether GPU nodes get a nvidia.com/gpu=:NoSchedule taint by default.
+    Prevents non-GPU workloads from scheduling on expensive GPU nodes.
+    Can be overridden per node group.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "gpu_driver_version" {
+  description = <<-EOT
+    NVIDIA driver branch version to install on GPU nodes (e.g., "570").
+    This is the major version branch, not the full version string.
+    Can be overridden per node group.
+  EOT
+  type        = string
+  default     = "570"
+}
+
+variable "gpu_driver_url" {
+  description = <<-EOT
+    URL for downloading the NVIDIA driver .run installer. Override for
+    air-gapped environments or internal mirrors. When empty, the setup
+    script constructs a URL from gpu_driver_version using the official
+    NVIDIA download server. Can be overridden per node group.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "etcd_backup" {
   description = "Configuration to automatically backup etcd to object storage"
   type        = map(string)

@@ -1,4 +1,5 @@
 625def421a168990939fbe8df0ef3982dc4c303f716eb30692f20248b899782b  common/10-setup-os.sh
+48c76ee6c44715baeb1259df818a1ce47a1658955a9fa3c7f937617e5dac3181  common/15-setup-gpu.sh
 bc582ab735a1566d9f2740e43b61b7159bd0eb7b7f7d72ba401607bac3bc8ca9  common/19-wait-for-instance-profile.sh
-c81d639aa21bac1c043f99a4b07803aeffb68384ebbfc1a47f5457e8a20ef3c4  common/20-setup-k3s.sh
+fcf3eaf37dfd462a752868d99fce0284d2ee7e52a591a3596a3ab36bd29ff8cf  common/20-setup-k3s.sh
 04e0eeaa7bb3a46372c67b25ad5f733b4669da571100c8ee90c74a2355f1534c  control-plane/30-setup-helm.sh

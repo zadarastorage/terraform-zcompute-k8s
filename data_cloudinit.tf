@@ -48,6 +48,14 @@ data "cloudinit_config" "k8s" {
             feature_gates   = try(each.value.feature_gates, [])
             node_labels     = try(each.value.k8s_labels, {})
             node_taints     = try(each.value.k8s_taints, {})
+            gpu = local._node_group_gpu_enabled[each.key] ? {
+              enabled        = true
+              model          = local._node_group_gpu[each.key].gpu_model
+              count          = local._node_group_gpu[each.key].gpu_count
+              pci_device_id  = local._node_group_gpu[each.key].pci_device_id
+              driver_version = try(each.value.gpu_driver_version, var.gpu_driver_version)
+              driver_url     = try(each.value.gpu_driver_url, var.gpu_driver_url)
+            } : { enabled = false }
           }) },
           { enabled = (try(each.value.role, "worker") == "control"), path = "/etc/zadara/k8s_helm.json", owner = "root:root", permissions = "0640",
             # Use 3-level merge logic from locals_merge.tf - handles chart/property/config merge, null filtering

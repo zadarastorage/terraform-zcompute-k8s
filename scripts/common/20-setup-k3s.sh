@@ -85,7 +85,6 @@ sed -e '/^#.*/d' -e 's/^search.*/search ./g' /run/systemd/resolve/resolv.conf > 
 cfg-append "kubelet-arg" "resolv-conf=/etc/rancher/k3s/kubelet.resolv"
 [ -e '/etc/rancher/k3s/kubelet.config' ] && cfg-append "kubelet-arg" "config=/etc/rancher/k3s/kubelet.config"
 NODE_TAINTS+=('ebs.csi.aws.com/agent-not-ready=:NoExecute')
-[[ $(lspci -n -d '10de:' | wc -l) -gt 0 ]] && NODE_LABELS+=('k8s.amazonaws.com/accelerator=nvidia-tesla')
 
 for entry in ${NODE_LABELS[@]}; do
 	cfg-append 'node-label' "${entry}"
